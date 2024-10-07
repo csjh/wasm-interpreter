@@ -165,8 +165,8 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> bytes,
     if (*iter == 5) {
         ++iter;
         uint32_t section_length = read_leb128(iter);
-        uint32_t n_memories = read_leb128(iter);
 
+        uint32_t n_memories = read_leb128(iter);
         assert(n_memories == 1);
 
         // Limits are encoded with a preceding flag indicating whether a maximum
@@ -204,7 +204,20 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> bytes,
 
     skip_custom_section();
 
-    // todo: code section
+    // code section
+    if (*iter == 10) {
+        ++iter;
+        uint32_t section_length = read_leb128(iter);
+        uint32_t n_functions = read_leb128(iter);
+
+        functions.reserve(n_functions);
+
+        for (uint32_t i = 0; i < n_functions; ++i) {
+            uint32_t function_length = read_leb128(iter);
+            functions.push_back(iter - bytes.get());
+            iter += function_length;
+        }
+    }
 
     skip_custom_section();
 
