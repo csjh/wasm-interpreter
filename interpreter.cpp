@@ -2,6 +2,7 @@
 #include <cstring>
 #include <memory>
 #include <stdint.h>
+#include <vector>
 
 namespace Mitey {
 union WasmValue {
@@ -11,21 +12,27 @@ union WasmValue {
     double f64;
 };
 
+typedef uint8_t WasmType;
+
 struct FunctionType {
-    uint32_t n_params;
-    uint8_t *params;
-    uint32_t n_results;
-    uint8_t *results;
+    std::vector<WasmType> params;
+    std::vector<WasmType> results;
 };
 
 class Instance {
+    // source bytes
     std::unique_ptr<uint8_t, void (*)(uint8_t *)> bytes;
+    // WebAssembly.Memory
     uint8_t *memory;
-    uint32_t *functions;
-    WasmValue *globals;
-    uint32_t *tables;
-    uint8_t **elements;
-    FunctionType *types;
+    // maps indices to the offset start of the function (immutable)
+    std::vector<uint32_t> functions;
+    // value of globals
+    std::vector<WasmValue> globals;
+    // maps indices to the offset start of the function (mutable)
+    std::vector<uint32_t> tables;
+    // maps element indices to the element offset in source bytes
+    std::vector<uint32_t> elements;
+    std::vector<FunctionType> types;
 
     Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> bytes,
              uint32_t length);
@@ -72,29 +79,29 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> bytes,
         uint32_t section_length = read_leb128(iter);
         uint32_t n_types = read_leb128(iter);
 
-        types = new FunctionType[n_types];
+        types.reserve(n_types);
 
         for (uint32_t i = 0; i < n_types; ++i) {
             assert(*iter == 0x60);
             ++iter;
 
-            FunctionType fn = {};
+            FunctionType fn;
 
-            fn.n_params = read_leb128(iter);
-            fn.params = new uint8_t[fn.n_params];
-            for (uint32_t j = 0; j < fn.n_params; ++j) {
-                types->params[j] = iter[j];
+            uint32_t n_params = read_leb128(iter);
+            fn.params.reserve(n_params);
+            for (uint32_t j = 0; j < n_params; ++j) {
+                fn.params.push_back(iter[j]);
             }
-            iter += fn.n_params;
+            iter += n_params;
 
-            fn.n_results = read_leb128(iter);
-            fn.results = new uint8_t[fn.n_results];
-            for (uint32_t j = 0; j < fn.n_results; ++j) {
-                fn.results[j] = iter[j];
+            uint32_t n_results = read_leb128(iter);
+            fn.results.reserve(n_results);
+            for (uint32_t j = 0; j < n_results; ++j) {
+                fn.results.push_back(iter[j]);
             }
-            iter += fn.n_results;
+            iter += n_results;
 
-            types[i] = fn;
+            types.emplace_back(fn);
         }
     }
 
@@ -155,7 +162,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> bytes,
     skip_custom_section();
 }
 
-Instance::~Instance() { delete[] types; }
+Instance::~Instance() { delete[] memory; }
 } // namespace Mitey
 
 /*
