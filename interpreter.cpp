@@ -2,6 +2,7 @@
 #include <cstring>
 #include <memory>
 #include <stdint.h>
+#include <stdlib.h>
 #include <vector>
 
 namespace Mitey {
@@ -19,11 +20,42 @@ struct FunctionType {
     std::vector<WasmType> results;
 };
 
+class WasmMemory {
+    uint8_t *memory;
+    uint32_t current;
+    uint32_t maximum;
+
+  public:
+    WasmMemory() : current(0), maximum(0), memory(nullptr) {}
+
+    WasmMemory(uint32_t initial, uint32_t maximum)
+        : current(initial), maximum(maximum),
+          memory(static_cast<uint8_t *>(
+              calloc(initial * 65536, sizeof(uint8_t)))) {}
+
+    ~WasmMemory() {
+        if (memory) {
+            free(memory);
+        }
+    }
+
+    void grow(uint32_t delta) {
+        uint32_t new_current = current + delta;
+        memory = (uint8_t *)realloc(memory, new_current * 65536);
+        std::memset(memory + current * 65536, 0, delta * 65536);
+        current = new_current;
+    }
+
+    template <typename T> T load(uint32_t offset) {
+        return *reinterpret_cast<T *>(memory + offset);
+    }
+};
+
 class Instance {
     // source bytes
     std::unique_ptr<uint8_t, void (*)(uint8_t *)> bytes;
     // WebAssembly.Memory
-    uint8_t *memory;
+    WasmMemory memory;
     // maps indices to the offset start of the function (immutable)
     std::vector<uint32_t> functions;
     // value of globals
@@ -129,7 +161,24 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> bytes,
 
     skip_custom_section();
 
-    // todo: memory section
+    // memory section
+    if (*iter == 5) {
+        ++iter;
+        uint32_t section_length = read_leb128(iter);
+        uint32_t n_memories = read_leb128(iter);
+
+        assert(n_memories == 1);
+
+        // Limits are encoded with a preceding flag indicating whether a maximum
+        // is present.
+        uint32_t flags = read_leb128(iter);
+        assert(flags == 0 || flags == 1);
+
+        uint32_t initial = read_leb128(iter);
+        uint32_t maximum = flags == 1 ? read_leb128(iter) : initial;
+
+        memory = WasmMemory(initial, maximum);
+    }
 
     skip_custom_section();
 
@@ -162,7 +211,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> bytes,
     skip_custom_section();
 }
 
-Instance::~Instance() { delete[] memory; }
+Instance::~Instance() {}
 } // namespace Mitey
 
 /*
