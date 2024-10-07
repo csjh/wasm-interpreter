@@ -190,7 +190,13 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> bytes,
 
     skip_custom_section();
 
-    // todo: start section
+    // start section
+    uint32_t start = -1;
+    if (*iter == 8) {
+        ++iter;
+        uint32_t _section_length = read_leb128(iter);
+        start = read_leb128(iter);
+    }
 
     skip_custom_section();
 
@@ -209,6 +215,8 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> bytes,
     // todo: data count section
 
     skip_custom_section();
+
+    // run start function
 }
 
 Instance::~Instance() {}
