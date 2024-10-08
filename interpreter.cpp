@@ -102,6 +102,12 @@ struct WasmGlobal {
     WasmValue value;
 };
 
+struct BrTarget {
+    bool is_loop : 1;
+    uint32_t byte : 31;
+};
+
+
 class Instance {
     // source bytes
     std::unique_ptr<uint8_t, void (*)(uint8_t *)> bytes;
@@ -111,14 +117,16 @@ class Instance {
     WasmValue *stack;
     // locals (points to somewhere in the stack allocation)
     WasmValue *locals;
-    // maps indices to the offset start of the function (immutable)
-    std::vector<uint32_t> functions;
+    // control stack
+    std::vector<BrTarget> control_stack;
+    // maps indices to the start of the function (immutable)
+    std::vector<uint8_t *> functions;
     // value of globals
     std::vector<WasmGlobal> globals;
-    // maps indices to the offset start of the function (mutable)
-    std::vector<uint32_t> tables;
-    // maps element indices to the element offset in source bytes
-    std::vector<uint32_t> elements;
+    // maps indices to the start of the function (mutable)
+    std::vector<uint8_t *> tables;
+    // maps element indices to the element in source bytes
+    std::vector<uint8_t *> elements;
     std::vector<FunctionType> types;
 
     Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> bytes,
@@ -126,7 +134,8 @@ class Instance {
 
     ~Instance();
 
-    void interpret(uint32_t idx);
+    void interpret(uint32_t offset);
+    void interpret(uint8_t *iter);
 };
 
 uint64_t read_leb128(uint8_t *&iter) {
@@ -152,13 +161,13 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> bytes,
     iter += 4;
 
     assert(*reinterpret_cast<uint32_t *>(iter) == 1);
-    iter += 4;
+    iter += sizeof(uint32_t);
 
     auto skip_custom_section = [&]() {
         while (*iter == 0) [[unlikely]] {
             ++iter;
             uint32_t length = *reinterpret_cast<uint32_t *>(iter);
-            iter += 4 + length;
+            iter += sizeof(uint32_t) + length;
         }
     };
 
@@ -267,7 +276,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> bytes,
 
             // todo: change this when interpret actually has meaning
             WasmValue value{0};
-            interpret(iter - bytes.get());
+            interpret(iter);
 
             globals.emplace_back(WasmGlobal{type, global_mut, value});
         }
@@ -313,7 +322,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> bytes,
 
         for (uint32_t i = 0; i < n_functions; ++i) {
             uint32_t function_length = read_leb128(iter);
-            functions.push_back(iter - bytes.get());
+            functions.push_back(iter);
             iter += function_length;
         }
     }
@@ -472,9 +481,10 @@ bool is_instruction(uint8_t byte) {
     return true;
 }
 
-void Instance::interpret(uint32_t idx) {
-    uint8_t *iter = bytes.get() + idx;
-    uint8_t byte = iter[0];
+void Instance::interpret(uint32_t offset) { interpret(bytes.get() + offset); }
+
+void Instance::interpret(uint8_t *iter) {
+    uint8_t byte = *iter++;
     assert(is_instruction(byte));
 
     auto push = [&](WasmValue &&value) { *stack++ = value; };
@@ -499,8 +509,10 @@ void Instance::interpret(uint32_t idx) {
     case nop:
         break;
     case block:
+        control_stack.push_back({false, (uint32_t)read_leb128(iter)});
         break;
     case loop:
+        control_stack.push_back({true, (uint32_t)read_leb128(iter)});
         break;
     case if_:
         break;
@@ -517,6 +529,8 @@ void Instance::interpret(uint32_t idx) {
     case return_:
         break;
     case call:
+        // todo: add stack frame stuff
+        interpret(functions[read_leb128(iter)]);
         break;
     case call_indirect:
         break;
@@ -593,12 +607,18 @@ void Instance::interpret(uint32_t idx) {
         push(memory.grow(pop().u32));
         break;
     case i32const:
+        push((int32_t)read_leb128(iter));
         break;
     case i64const:
+        push((int64_t)read_leb128(iter));
         break;
     case f32const:
+        push(*reinterpret_cast<float *>(iter));
+        iter += sizeof(float);
         break;
     case f64const:
+        push(*reinterpret_cast<double *>(iter));
+        iter += sizeof(double);
         break;
     // clang-format off
     case i32eqz:       UNARY_OP (i32, 0 ==);
