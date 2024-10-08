@@ -71,6 +71,22 @@ class WasmMemory {
     }
 };
 
+enum class mut {
+    const_ = 0x0,
+    var = 0x1,
+};
+
+bool is_mut(uint8_t byte) {
+    return byte == static_cast<uint8_t>(mut::const_) ||
+           byte == static_cast<uint8_t>(mut::var);
+}
+
+struct WasmGlobal {
+    valtype type;
+    mut mut;
+    WasmValue value;
+};
+
 class Instance {
     // source bytes
     std::unique_ptr<uint8_t, void (*)(uint8_t *)> bytes;
@@ -79,7 +95,7 @@ class Instance {
     // maps indices to the offset start of the function (immutable)
     std::vector<uint32_t> functions;
     // value of globals
-    std::vector<WasmValue> globals;
+    std::vector<WasmGlobal> globals;
     // maps indices to the offset start of the function (mutable)
     std::vector<uint32_t> tables;
     // maps element indices to the element offset in source bytes
@@ -205,11 +221,29 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> bytes,
 
     skip_custom_section();
 
-    // todo: global section
+    // global section
     if (*iter == 6) {
         ++iter;
         uint32_t section_length = read_leb128(iter);
-        iter += section_length;
+        uint32_t n_globals = read_leb128(iter);
+
+        globals.reserve(n_globals);
+
+        for (uint32_t i = 0; i < n_globals; ++i) {
+            uint8_t maybe_type = *iter++;
+            assert(is_valtype(maybe_type));
+            valtype type = static_cast<valtype>(maybe_type);
+
+            uint8_t maybe_mut = *iter++;
+            assert(is_mut(maybe_mut));
+            mut global_mut = static_cast<mut>(maybe_mut);
+
+            // todo: change this when interpret actually has meaning
+            WasmValue value;
+            interpret(iter - bytes.get());
+
+            globals.emplace_back(WasmGlobal{type, global_mut, value});
+        }
     }
 
     skip_custom_section();
