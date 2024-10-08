@@ -91,9 +91,10 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> bytes,
     : bytes(std::move(bytes)) {
     uint8_t *iter = bytes.get();
     assert(std::strncmp(reinterpret_cast<char *>(iter), "\0asm", 4) == 0);
-
     iter += 4;
+
     assert(*reinterpret_cast<uint32_t *>(iter) == 1);
+    iter += 4;
 
     auto skip_custom_section = [&]() {
         while (*iter == 0) [[unlikely]] {
@@ -140,20 +141,20 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> bytes,
     skip_custom_section();
 
     // todo: import section
+    if (*iter == 2) {
+        ++iter;
+        uint32_t section_length = read_leb128(iter);
+        iter += section_length;
+    }
 
     skip_custom_section();
 
-    // function section (is this even needed for non-validation purposes)
-    // if (*iter == 3) {
-    //     ++iter;
-    //     uint32_t section_length = read_leb128(iter);
-    //     uint32_t n_functions = read_leb128(iter);
-
-    //     functions = new uint32_t[n_functions];
-    //     for (uint32_t i = 0; i < n_functions; ++i) {
-    //         functions[i] = read_leb128(iter);
-    //     }
-    // }
+    // todo: function section (is this even needed for non-validation purposes)
+    if (*iter == 3) {
+        ++iter;
+        uint32_t section_length = read_leb128(iter);
+        iter += section_length;
+    }
 
     skip_custom_section();
 
@@ -183,10 +184,20 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> bytes,
     skip_custom_section();
 
     // todo: global section
+    if (*iter == 6) {
+        ++iter;
+        uint32_t section_length = read_leb128(iter);
+        iter += section_length;
+    }
 
     skip_custom_section();
 
     // todo: export section
+    if (*iter == 7) {
+        ++iter;
+        uint32_t section_length = read_leb128(iter);
+        iter += section_length;
+    }
 
     skip_custom_section();
 
@@ -194,13 +205,18 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> bytes,
     uint32_t start = -1;
     if (*iter == 8) {
         ++iter;
-        uint32_t _section_length = read_leb128(iter);
+        uint32_t section_length = read_leb128(iter);
         start = read_leb128(iter);
     }
 
     skip_custom_section();
 
     // todo: element section
+    if (*iter == 9) {
+        ++iter;
+        uint32_t section_length = read_leb128(iter);
+        iter += section_length;
+    }
 
     skip_custom_section();
 
@@ -222,10 +238,20 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> bytes,
     skip_custom_section();
 
     // todo: data section
+    if (*iter == 11) {
+        ++iter;
+        uint32_t section_length = read_leb128(iter);
+        iter += section_length;
+    }
 
     skip_custom_section();
 
     // todo: data count section
+    if (*iter == 12) {
+        ++iter;
+        uint32_t section_length = read_leb128(iter);
+        iter += section_length;
+    }
 
     skip_custom_section();
 
