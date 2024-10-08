@@ -197,6 +197,11 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> bytes,
     skip_custom_section();
 
     // todo: table section
+    if (*iter == 4) {
+        ++iter;
+        uint32_t section_length = read_leb128(iter);
+        iter += section_length;
+    }
 
     skip_custom_section();
 
