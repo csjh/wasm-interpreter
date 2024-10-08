@@ -730,7 +730,9 @@ void Instance::interpret(uint32_t idx) {
     // clang-format on
 }
 
-Instance::~Instance() {}
+// todo: this should check stack is the base pointer
+// won't be necessary after validation is added
+Instance::~Instance() { free(stack); }
 } // namespace Mitey
 
 /*
