@@ -6,7 +6,7 @@
 #include <vector>
 
 namespace Mitey {
-enum class Valtype {
+enum class valtype {
     // numtype
     i32 = 0x7f,
     i64 = 0x7e,
@@ -22,10 +22,10 @@ enum class Valtype {
 };
 
 bool is_valtype(uint8_t byte) {
-    return byte == static_cast<uint8_t>(Valtype::i32) ||
-           byte == static_cast<uint8_t>(Valtype::i64) ||
-           byte == static_cast<uint8_t>(Valtype::f32) ||
-           byte == static_cast<uint8_t>(Valtype::f64);
+    return byte == static_cast<uint8_t>(valtype::i32) ||
+           byte == static_cast<uint8_t>(valtype::i64) ||
+           byte == static_cast<uint8_t>(valtype::f32) ||
+           byte == static_cast<uint8_t>(valtype::f64);
 }
 
 union WasmValue {
@@ -36,8 +36,8 @@ union WasmValue {
 };
 
 struct FunctionType {
-    std::vector<Valtype> params;
-    std::vector<Valtype> results;
+    std::vector<valtype> params;
+    std::vector<valtype> results;
 };
 
 class WasmMemory {
@@ -144,7 +144,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> bytes,
             fn.params.reserve(n_params);
             for (uint32_t j = 0; j < n_params; ++j) {
                 assert(is_valtype(iter[j]));
-                fn.params.push_back(static_cast<Valtype>(iter[j]));
+                fn.params.push_back(static_cast<valtype>(iter[j]));
             }
             iter += n_params;
 
@@ -152,7 +152,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> bytes,
             fn.results.reserve(n_results);
             for (uint32_t j = 0; j < n_results; ++j) {
                 assert(is_valtype(iter[j]));
-                fn.results.push_back(static_cast<Valtype>(iter[j]));
+                fn.results.push_back(static_cast<valtype>(iter[j]));
             }
             iter += n_results;
 
