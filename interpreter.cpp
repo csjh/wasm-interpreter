@@ -492,7 +492,7 @@ void Instance::interpret(uint8_t *iter) {
     uint8_t byte = *iter++;
     assert(is_instruction(byte));
 
-    auto push = [&](WasmValue &&value) { *stack++ = value; };
+    auto push = [&](WasmValue value) { *stack++ = value; };
     auto pop = [&]() { return *--stack; };
     auto exec_br = [&](uint32_t depth) {
         BrTarget target;
@@ -570,7 +570,7 @@ void Instance::interpret(uint8_t *iter) {
     case select:
         break;
     case localget:
-        push(std::move(locals[read_leb128(iter)]));
+        push(locals[read_leb128(iter)]);
         break;
     case localset:
         locals[read_leb128(iter)] = pop();
@@ -579,7 +579,7 @@ void Instance::interpret(uint8_t *iter) {
         locals[read_leb128(iter)] = *stack;
         break;
     case globalget:
-        push(std::move(globals[read_leb128(iter)].value));
+        push(globals[read_leb128(iter)].value);
         break;
     case globalset:
         globals[read_leb128(iter)].value = pop();
