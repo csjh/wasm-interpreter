@@ -112,6 +112,17 @@ struct BrTarget {
     uint32_t byte : 31;
 };
 
+struct FunctionInfo {
+    uint8_t *start;
+    FunctionType type;
+};
+
+struct StackFrame {
+    // locals (points to somewhere in the stack allocation)
+    WasmValue *locals;
+    // control stack
+    std::vector<BrTarget> control_stack;
+};
 
 class Instance {
     // source bytes
@@ -120,12 +131,9 @@ class Instance {
     WasmMemory memory;
     // internal stack
     WasmValue *stack;
-    // locals (points to somewhere in the stack allocation)
-    WasmValue *locals;
-    // control stack
-    std::vector<BrTarget> control_stack;
-    // maps indices to the start of the function (immutable)
-    std::vector<uint8_t *> functions;
+    // function-specific frames
+    std::vector<StackFrame> frames;
+    std::vector<FunctionInfo> functions;
     // value of globals
     std::vector<WasmGlobal> globals;
     // maps indices to the start of the function (mutable)
@@ -134,13 +142,14 @@ class Instance {
     std::vector<uint8_t *> elements;
     std::vector<FunctionType> types;
 
+    void interpret(uint32_t offset);
+    void interpret(uint8_t *iter);
+
+  public:
     Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> bytes,
              uint32_t length);
 
     ~Instance();
-
-    void interpret(uint32_t offset);
-    void interpret(uint8_t *iter);
 };
 
 uint64_t read_leb128(uint8_t *&iter) {
@@ -157,9 +166,9 @@ uint64_t read_leb128(uint8_t *&iter) {
 
 constexpr uint32_t stack_size = 5 * 1024 * 1024; // 5mb
 
-Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> bytes,
+Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
                    uint32_t length)
-    : bytes(std::move(bytes)),
+    : bytes(std::move(_bytes)),
       stack(static_cast<WasmValue *>(malloc(stack_size))) {
     uint8_t *iter = bytes.get();
     assert(std::strncmp(reinterpret_cast<char *>(iter), "\0asm", 4) == 0);
@@ -223,11 +232,18 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> bytes,
 
     skip_custom_section();
 
-    // todo: function section (is this even needed for non-validation purposes)
+    // function type section
     if (*iter == 3) {
         ++iter;
         uint32_t section_length = read_leb128(iter);
-        iter += section_length;
+        uint32_t n_functions = read_leb128(iter);
+
+        functions.reserve(n_functions);
+
+        for (uint32_t i = 0; i < n_functions; ++i) {
+            functions.emplace_back(
+                FunctionInfo{nullptr, types[read_leb128(iter)]});
+        }
     }
 
     skip_custom_section();
@@ -257,7 +273,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> bytes,
         uint32_t initial = read_leb128(iter);
         uint32_t maximum = flags == 1 ? read_leb128(iter) : initial;
 
-        memory = WasmMemory(initial, maximum);
+        new (&memory) WasmMemory(initial, maximum);
     }
 
     skip_custom_section();
@@ -281,7 +297,9 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> bytes,
 
             // todo: change this when interpret actually has meaning
             WasmValue value{0};
-            interpret(iter);
+            while (*iter++ != 0x0b) {
+                // interpret(iter);
+            }
 
             globals.emplace_back(WasmGlobal{type, global_mut, value});
         }
@@ -327,7 +345,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> bytes,
 
         for (uint32_t i = 0; i < n_functions; ++i) {
             uint32_t function_length = read_leb128(iter);
-            functions.push_back(iter);
+            functions[i].start = iter;
             iter += function_length;
         }
     }
@@ -497,8 +515,8 @@ void Instance::interpret(uint8_t *iter) {
     auto exec_br = [&](uint32_t depth) {
         BrTarget target;
         do {
-            target = control_stack.back();
-            control_stack.pop_back();
+            target = frames.back().control_stack.back();
+            frames.back().control_stack.pop_back();
         } while (depth--);
         interpret(target.byte);
     };
@@ -521,17 +539,25 @@ void Instance::interpret(uint8_t *iter) {
         break;
     case nop:
         break;
-    case block:
-        control_stack.push_back({false, (uint32_t)read_leb128(iter)});
+    case block: {
+        uint32_t block_type = read_leb128(iter);
+        frames.back().control_stack.push_back(
+            {false, static_cast<uint32_t>(iter - bytes.get())});
         break;
-    case loop:
-        control_stack.push_back({true, (uint32_t)read_leb128(iter)});
+    }
+    case loop: {
+        uint32_t block_type = read_leb128(iter);
+        frames.back().control_stack.push_back(
+            {true, static_cast<uint32_t>(iter - bytes.get())});
         break;
+    }
     case if_:
+        // how do i skip to the else block? or vice versa?
         break;
     case else_:
         break;
     case end:
+        frames.back().control_stack.pop_back();
         break;
     case br: {
         exec_br(read_leb128(iter));
@@ -558,10 +584,12 @@ void Instance::interpret(uint8_t *iter) {
     }
     case return_:
         break;
-    case call:
-        // todo: add stack frame stuff
-        interpret(functions[read_leb128(iter)]);
+    case call: {
+        FunctionInfo &fn = functions[read_leb128(iter)];
+        frames.push_back(StackFrame{stack - fn.type.params.size(), {}});
+        interpret(fn.start);
         break;
+    }
     case call_indirect:
         break;
     case drop:
@@ -574,13 +602,13 @@ void Instance::interpret(uint8_t *iter) {
         break;
     }
     case localget:
-        push(locals[read_leb128(iter)]);
+        push(frames.back().locals[read_leb128(iter)]);
         break;
     case localset:
-        locals[read_leb128(iter)] = pop();
+        frames.back().locals[read_leb128(iter)] = pop();
         break;
     case localtee:
-        locals[read_leb128(iter)] = *stack;
+        frames.back().locals[read_leb128(iter)] = *stack;
         break;
     case globalget:
         push(globals[read_leb128(iter)].value);
