@@ -572,14 +572,18 @@ void Instance::interpret(uint8_t *iter) {
     case br_table: {
         uint32_t v = pop().u32;
         uint32_t n_targets = read_leb128(iter);
-        uint32_t *depths = reinterpret_cast<uint32_t *>(
-            alloca((n_targets + 1) * sizeof(uint32_t)));
+        uint32_t target, depth = -1;
 
         // <= because there's an extra for the default target
         for (uint32_t i = 0; i <= n_targets; ++i) {
-            depths[i] = read_leb128(iter);
+            target = read_leb128(iter);
+            if (i == v)
+                depth = target;
         }
-        exec_br(depths[std::max(n_targets, v)]);
+        // use default
+        if (depth == -1)
+            depth = target;
+        exec_br(depth);
         break;
     }
     case return_:
