@@ -567,8 +567,12 @@ void Instance::interpret(uint8_t *iter) {
     case drop:
         pop();
         break;
-    case select:
+    case select: {
+        WasmValue vtrue = pop();
+        WasmValue vfalse = pop();
+        push(pop().i32 ? vtrue : vfalse);
         break;
+    }
     case localget:
         push(locals[read_leb128(iter)]);
         break;
