@@ -73,7 +73,12 @@ class WasmMemory {
 
     uint32_t grow(uint32_t delta) {
         uint32_t new_current = current + delta;
-        memory = (uint8_t *)realloc(memory, new_current * 65536);
+        assert(new_current <= maximum);
+
+        uint8_t *new_memory = (uint8_t *)realloc(memory, new_current * 65536);
+        if (new_memory == NULL)
+            return -1;
+        memory = new_memory;
         std::memset(memory + current * 65536, 0, delta * 65536);
 
         uint32_t old_current = current;
@@ -625,12 +630,16 @@ void Instance::interpret(uint8_t *iter) {
         break;
     case i64store32:
         break;
-    case memorysize:
+    case memorysize: {
+        uint32_t mem_idx = read_leb128(iter);
         push(memory.size());
         break;
-    case memorygrow:
+    }
+    case memorygrow: {
+        uint32_t mem_idx = read_leb128(iter);
         push(memory.grow(pop().u32));
         break;
+    }
     case i32const:
         push((int32_t)read_leb128(iter));
         break;
