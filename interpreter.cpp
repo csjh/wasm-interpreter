@@ -489,6 +489,14 @@ void Instance::interpret(uint8_t *iter) {
 
     auto push = [&](WasmValue &&value) { *stack++ = value; };
     auto pop = [&]() { return *--stack; };
+    auto exec_br = [&](uint32_t depth) {
+        BrTarget target;
+        do {
+            target = control_stack.back();
+            control_stack.pop_back();
+        } while (depth--);
+        interpret(target.byte);
+    };
 
 #define UNARY_OP(type, op)                                                     \
     push(op pop().type);                                                       \
@@ -520,12 +528,29 @@ void Instance::interpret(uint8_t *iter) {
         break;
     case end:
         break;
-    case br:
+    case br: {
+        exec_br(read_leb128(iter));
         break;
-    case br_if:
+    }
+    case br_if: {
+        uint32_t depth = read_leb128(iter);
+        if (pop().u32)
+            exec_br(depth);
         break;
-    case br_table:
+    }
+    case br_table: {
+        uint32_t v = pop().u32;
+        uint32_t n_targets = read_leb128(iter);
+        uint32_t *depths = reinterpret_cast<uint32_t *>(
+            alloca((n_targets + 1) * sizeof(uint32_t)));
+
+        // <= because there's an extra for the default target
+        for (uint32_t i = 0; i <= n_targets; ++i) {
+            depths[i] = read_leb128(iter);
+        }
+        exec_br(depths[std::max(n_targets, v)]);
         break;
+    }
     case return_:
         break;
     case call:
