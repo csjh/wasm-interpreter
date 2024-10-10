@@ -86,8 +86,22 @@ class WasmMemory {
         return old_current;
     }
 
-    template <typename T> T load(uint32_t offset) {
-        return *reinterpret_cast<T *>(memory + offset);
+    template <typename T>
+    T load(uint32_t ptr, uint32_t offset, uint32_t align) {
+        uint8_t *effective = memory + ptr + offset;
+        if (reinterpret_cast<uint64_t>(effective) % align != 0)
+            __builtin_unreachable();
+        T value;
+        std::memcpy(&value, effective, sizeof(T));
+        return value;
+    }
+
+    template <typename T>
+    void store(uint32_t ptr, uint32_t offset, uint32_t align, T value) {
+        uint8_t *effective = memory + ptr + offset;
+        if (reinterpret_cast<uint64_t>(effective) % align != 0)
+            __builtin_unreachable();
+        std::memcpy(effective, &value, sizeof(T));
     }
 };
 
@@ -532,6 +546,25 @@ void Instance::interpret(uint8_t *iter) {
     break
 #define BINARY_FN(type, fn) push(fn(pop().type, pop().type));
 
+#define LOAD(type)                                                             \
+    {                                                                          \
+        uint32_t align = 1 << read_leb128(iter);                               \
+        uint32_t offset = read_leb128(iter);                                   \
+        uint32_t ptr = pop().u32;                                              \
+        push(memory.load<type>(ptr, offset, align));                           \
+        break;                                                                 \
+    }
+
+#define STORE(type, stacktype)                                                 \
+    {                                                                          \
+        uint32_t align = 1 << read_leb128(iter);                               \
+        uint32_t offset = read_leb128(iter);                                   \
+        uint32_t ptr = pop().u32;                                              \
+        memory.store<type>(ptr, offset, align,                                 \
+                           static_cast<type>(pop().stacktype));                \
+        break;                                                                 \
+    }
+
     using enum Instruction;
     switch (static_cast<Instruction>(byte)) {
     case unreachable:
@@ -620,52 +653,31 @@ void Instance::interpret(uint8_t *iter) {
     case globalset:
         globals[read_leb128(iter)].value = pop();
         break;
-    case i32load:
-        break;
-    case i64load:
-        break;
-    case f32load:
-        break;
-    case f64load:
-        break;
-    case i32load8_s:
-        break;
-    case i32load8_u:
-        break;
-    case i32load16_s:
-        break;
-    case i32load16_u:
-        break;
-    case i64load8_s:
-        break;
-    case i64load8_u:
-        break;
-    case i64load16_s:
-        break;
-    case i64load16_u:
-        break;
-    case i64load32_s:
-        break;
-    case i64load32_u:
-        break;
-    case i32store:
-        break;
-    case i64store:
-        break;
-    case f32store:
-        break;
-    case f64store:
-        break;
-    case i32store8:
-        break;
-    case i32store16:
-        break;
-    case i64store8:
-        break;
-    case i64store16:
-        break;
-    case i64store32:
-        break;
+    // clang-format off
+    case i32load: LOAD(uint32_t);
+    case i64load: LOAD(uint64_t);
+    case f32load: LOAD(float);
+    case f64load: LOAD(double);
+    case i32load8_s: LOAD(int8_t);
+    case i32load8_u: LOAD(uint8_t);
+    case i32load16_s: LOAD(int16_t);
+    case i32load16_u: LOAD(uint16_t);
+    case i64load8_s: LOAD(int8_t);
+    case i64load8_u: LOAD(uint8_t);
+    case i64load16_s: LOAD(int16_t);
+    case i64load16_u: LOAD(uint16_t);
+    case i64load32_s: LOAD(int32_t);
+    case i64load32_u: LOAD(uint32_t);
+    case i32store: STORE(uint32_t, u32);
+    case i64store: STORE(uint64_t, u64);
+    case f32store: STORE(float, f32);
+    case f64store: STORE(double, f64);
+    case i32store8: STORE(uint8_t, u32);
+    case i32store16: STORE(uint16_t, u32);
+    case i64store8: STORE(uint8_t, u64);
+    case i64store16: STORE(uint16_t, u64);
+    case i64store32: STORE(uint32_t, u64);
+    // clang-format on
     case memorysize: {
         uint32_t mem_idx = read_leb128(iter);
         push(memory.size());
