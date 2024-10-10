@@ -653,31 +653,6 @@ void Instance::interpret(uint8_t *iter) {
     case globalset:
         globals[read_leb128(iter)].value = pop();
         break;
-    // clang-format off
-    case i32load: LOAD(uint32_t);
-    case i64load: LOAD(uint64_t);
-    case f32load: LOAD(float);
-    case f64load: LOAD(double);
-    case i32load8_s: LOAD(int8_t);
-    case i32load8_u: LOAD(uint8_t);
-    case i32load16_s: LOAD(int16_t);
-    case i32load16_u: LOAD(uint16_t);
-    case i64load8_s: LOAD(int8_t);
-    case i64load8_u: LOAD(uint8_t);
-    case i64load16_s: LOAD(int16_t);
-    case i64load16_u: LOAD(uint16_t);
-    case i64load32_s: LOAD(int32_t);
-    case i64load32_u: LOAD(uint32_t);
-    case i32store: STORE(uint32_t, u32);
-    case i64store: STORE(uint64_t, u64);
-    case f32store: STORE(float, f32);
-    case f64store: STORE(double, f64);
-    case i32store8: STORE(uint8_t, u32);
-    case i32store16: STORE(uint16_t, u32);
-    case i64store8: STORE(uint8_t, u64);
-    case i64store16: STORE(uint16_t, u64);
-    case i64store32: STORE(uint32_t, u64);
-    // clang-format on
     case memorysize: {
         uint32_t mem_idx = read_leb128(iter);
         push(memory.size());
@@ -703,6 +678,29 @@ void Instance::interpret(uint8_t *iter) {
         iter += sizeof(double);
         break;
     // clang-format off
+    case i32load:      LOAD(uint32_t);
+    case i64load:      LOAD(uint64_t);
+    case f32load:      LOAD(float);
+    case f64load:      LOAD(double);
+    case i32load8_s:   LOAD(int8_t);
+    case i32load8_u:   LOAD(uint8_t);
+    case i32load16_s:  LOAD(int16_t);
+    case i32load16_u:  LOAD(uint16_t);
+    case i64load8_s:   LOAD(int8_t);
+    case i64load8_u:   LOAD(uint8_t);
+    case i64load16_s:  LOAD(int16_t);
+    case i64load16_u:  LOAD(uint16_t);
+    case i64load32_s:  LOAD(int32_t);
+    case i64load32_u:  LOAD(uint32_t);
+    case i32store:     STORE(uint32_t, u32);
+    case i64store:     STORE(uint64_t, u64);
+    case f32store:     STORE(float, f32);
+    case f64store:     STORE(double, f64);
+    case i32store8:    STORE(uint8_t, u32);
+    case i32store16:   STORE(uint16_t, u32);
+    case i64store8:    STORE(uint8_t, u64);
+    case i64store16:   STORE(uint16_t, u64);
+    case i64store32:   STORE(uint32_t, u64);
     case i32eqz:       UNARY_OP (i32, 0 ==);
     case i64eqz:       UNARY_OP (i64, 0 ==);
     case i32eq:        BINARY_OP(i32, ==);
@@ -830,6 +828,13 @@ void Instance::interpret(uint8_t *iter) {
     default: __builtin_unreachable();
     };
     // clang-format on
+
+#undef UNARY_OP
+#undef UNARY_FN
+#undef BINARY_OP
+#undef BINARY_FN
+#undef LOAD
+#undef STORE
 }
 
 // todo: this should check stack is the base pointer
