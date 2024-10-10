@@ -672,12 +672,17 @@ void Instance::interpret(uint8_t *iter) {
         case i64const:
             push((int64_t)read_leb128(iter));
             break;
-        case f32const:
-            push(*reinterpret_cast<float *>(iter));
+        case f32const: {
+            float v;
+            std::memcpy(&v, iter, sizeof(float));
+            push(v);
             iter += sizeof(float);
             break;
+        }
         case f64const:
-            push(*reinterpret_cast<double *>(iter));
+            double v;
+            std::memcpy(&v, iter, sizeof(double));
+            push(v);
             iter += sizeof(double);
             break;
         // clang-format off
