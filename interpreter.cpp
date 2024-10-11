@@ -121,11 +121,6 @@ struct WasmGlobal {
     WasmValue value;
 };
 
-struct BrTarget {
-    bool is_loop : 1;
-    uint32_t byte : 31;
-};
-
 struct FunctionInfo {
     uint8_t *start;
     FunctionType type;
@@ -134,8 +129,8 @@ struct FunctionInfo {
 struct StackFrame {
     // locals (points to somewhere in the stack allocation)
     WasmValue *locals;
-    // control stack
-    std::vector<BrTarget> control_stack;
+    // control stack (pointers to the place a br jumps to)
+    std::vector<uint8_t *> control_stack;
 };
 
 class Instance {
@@ -523,13 +518,19 @@ void Instance::interpret(uint32_t offset) { interpret(bytes.get() + offset); }
 void Instance::interpret(uint8_t *iter) {
     auto push = [&](WasmValue value) { *stack++ = value; };
     auto pop = [&]() { return *--stack; };
-    auto exec_br = [&](uint32_t depth) {
-        BrTarget target;
-        do {
-            target = frames.back().control_stack.back();
-            frames.back().control_stack.pop_back();
-        } while (depth--);
-        interpret(target.byte);
+    auto brk = [&](uint32_t depth) {
+        if (depth == frames.back().control_stack.size()) {
+            frames.pop_back();
+            return true;
+        } else {
+            depth++;
+            std::vector<uint8_t *> &control_stack = frames.back().control_stack;
+            uint8_t *target = control_stack[control_stack.size() - depth];
+            control_stack.erase(control_stack.end() - depth,
+                                control_stack.end());
+            interpret(target);
+            return false;
+        }
     };
 
 #define UNARY_OP(type, op)                                                     \
@@ -576,31 +577,39 @@ void Instance::interpret(uint8_t *iter) {
         case block: {
             uint32_t block_type = read_leb128(iter);
             frames.back().control_stack.push_back(
-                {false, static_cast<uint32_t>(iter - bytes.get())});
+                /* corresponding end instruction */ nullptr);
             break;
         }
         case loop: {
             uint32_t block_type = read_leb128(iter);
-            frames.back().control_stack.push_back(
-                {true, static_cast<uint32_t>(iter - bytes.get())});
+            frames.back().control_stack.push_back(iter);
             break;
         }
         case if_:
-            // how do i skip to the else block? or vice versa?
+            frames.back().control_stack.push_back(
+                /* corresponding end instruction */ nullptr);
+
+            // note: need to store 2 values per if: the start of else,
+            // and the end instruction
             break;
         case else_:
+            // control stack mutation isn't is done in if handling
             break;
         case end:
             frames.back().control_stack.pop_back();
+            if (frames.back().control_stack.empty())
+                return;
             break;
         case br: {
-            exec_br(read_leb128(iter));
+            if (brk(read_leb128(iter)))
+                return;
             break;
         }
         case br_if: {
             uint32_t depth = read_leb128(iter);
             if (pop().u32)
-                exec_br(depth);
+                if (brk(depth))
+                    return;
             break;
         }
         case br_table: {
@@ -617,11 +626,13 @@ void Instance::interpret(uint8_t *iter) {
             // use default
             if (depth == -1)
                 depth = target;
-            exec_br(depth);
+            if (brk(depth))
+                return;
             break;
         }
         case return_:
-            break;
+            assert(brk(frames.back().control_stack.size()));
+            return;
         case call: {
             FunctionInfo &fn = functions[read_leb128(iter)];
             // parameters are the first locals and they're taken from the top of
