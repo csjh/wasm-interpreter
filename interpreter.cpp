@@ -45,7 +45,7 @@ union WasmValue {
     WasmValue(double f64) : f64(f64) {}
 };
 
-struct FunctionType {
+struct Signature {
     std::vector<valtype> params;
     std::vector<valtype> results;
 };
@@ -123,7 +123,7 @@ struct WasmGlobal {
 
 struct FunctionInfo {
     uint8_t *start;
-    FunctionType type;
+    Signature type;
 };
 
 struct StackFrame {
@@ -149,7 +149,7 @@ class Instance {
     std::vector<uint8_t *> tables;
     // maps element indices to the element in source bytes
     std::vector<uint8_t *> elements;
-    std::vector<FunctionType> types;
+    std::vector<Signature> types;
 
     void interpret(uint32_t offset);
     void interpret(uint8_t *iter);
@@ -208,7 +208,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
             assert(*iter == 0x60);
             ++iter;
 
-            FunctionType fn;
+            Signature fn;
 
             uint32_t n_params = read_leb128(iter);
             fn.params.reserve(n_params);
