@@ -11,12 +11,12 @@ enum class valtype {
     f32 = 0x7d,
     f64 = 0x7c,
 
-    // vectype
-    v128 = 0x7b,
+    // // vectype
+    // v128 = 0x7b,
 
-    // reftype
-    funcref = 0x70,
-    externref = 0x6f,
+    // // reftype
+    // funcref = 0x70,
+    // externref = 0x6f,
 };
 
 static inline bool is_valtype(uint8_t byte) {
