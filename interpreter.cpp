@@ -343,6 +343,17 @@ void Instance::interpret(uint32_t offset) { interpret(bytes.get() + offset); }
 void Instance::interpret(uint8_t *iter) {
     auto push = [&](WasmValue value) { *stack++ = value; };
     auto pop = [&]() { return *--stack; };
+
+    /*
+        (functions and ifs are blocks)
+
+        enter into loop          -> valid if stack <= param_type
+        enter into block         -> valid if stack <= param_type
+        br depth is loop (enter) -> valid if stack <= param_type
+        br depth is block (exit) -> valid if stack <= return_type
+        exit from loop           -> valid if stack == return_type
+        exit from block          -> valid if stack == return_type
+    */
     auto brk = [&](uint32_t depth) {
         if (depth == frames.back().control_stack.size()) {
             frames.pop_back();
