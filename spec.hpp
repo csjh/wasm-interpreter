@@ -41,6 +41,30 @@ static inline bool is_mut(uint8_t byte) {
            byte == static_cast<uint8_t>(mut::var);
 }
 
+static inline int64_t read_sleb128(uint8_t *&iter) {
+    int64_t result = 0;
+    uint32_t shift = 0;
+    uint8_t byte;
+    do {
+        byte = *iter++;
+        result |= (byte & 0x7f) << shift;
+        shift += 7;
+    } while (byte & 0x80);
+    if (shift < 64 && (byte & 0x40)) {
+        result |= -1 << shift;
+    }
+    return result;
+}
+
+template <typename T, uint8_t bits = sizeof(T) * 8>
+static inline T safe_read_sleb128(uint8_t *&iter) {
+    assert(bits / 8 <= sizeof(T));
+    uint64_t result = read_sleb128(iter);
+    assert(result <= (1ULL << (bits - 1)) - 1);
+    assert(result >= -(1ULL << (bits - 1)));
+    return static_cast<T>(result);
+}
+
 static inline uint64_t read_leb128(uint8_t *&iter) {
     uint64_t result = 0;
     uint32_t shift = 0;
@@ -51,6 +75,14 @@ static inline uint64_t read_leb128(uint8_t *&iter) {
         shift += 7;
     } while (byte & 0x80);
     return result;
+}
+
+template <typename T>
+static inline T safe_read_leb128(uint8_t *&iter, uint8_t bits = sizeof(T) * 8) {
+    assert(bits / 8 <= sizeof(T));
+    uint64_t result = read_leb128(iter);
+    assert(result <= (1ULL << bits) - 1);
+    return static_cast<T>(result);
 }
 
 // clang-format off

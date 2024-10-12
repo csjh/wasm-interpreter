@@ -1,3 +1,4 @@
+#include "spec.hpp"
 #include <assert.h>
 #include <cstring>
 #include <memory>
@@ -88,6 +89,7 @@ struct WasmGlobal {
 struct FunctionInfo {
     uint8_t *start;
     Signature type;
+    std::vector<valtype> locals;
 };
 
 struct StackFrame {
@@ -151,8 +153,8 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
     // type section
     if (*iter == 1) {
         ++iter;
-        uint32_t section_length = read_leb128(iter);
-        uint32_t n_types = read_leb128(iter);
+        uint32_t section_length = safe_read_leb128<uint32_t>(iter);
+        uint32_t n_types = safe_read_leb128<uint32_t>(iter);
 
         types.reserve(n_types);
 
@@ -162,7 +164,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
 
             Signature fn;
 
-            uint32_t n_params = read_leb128(iter);
+            uint32_t n_params = safe_read_leb128<uint32_t>(iter);
             fn.params.reserve(n_params);
             for (uint32_t j = 0; j < n_params; ++j) {
                 assert(is_valtype(iter[j]));
@@ -170,7 +172,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
             }
             iter += n_params;
 
-            uint32_t n_results = read_leb128(iter);
+            uint32_t n_results = safe_read_leb128<uint32_t>(iter);
             fn.results.reserve(n_results);
             for (uint32_t j = 0; j < n_results; ++j) {
                 assert(is_valtype(iter[j]));
@@ -187,7 +189,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
     // todo: import section
     if (*iter == 2) {
         ++iter;
-        uint32_t section_length = read_leb128(iter);
+        uint32_t section_length = safe_read_leb128<uint32_t>(iter);
         iter += section_length;
     }
 
@@ -196,14 +198,14 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
     // function type section
     if (*iter == 3) {
         ++iter;
-        uint32_t section_length = read_leb128(iter);
-        uint32_t n_functions = read_leb128(iter);
+        uint32_t section_length = safe_read_leb128<uint32_t>(iter);
+        uint32_t n_functions = safe_read_leb128<uint32_t>(iter);
 
         functions.reserve(n_functions);
 
         for (uint32_t i = 0; i < n_functions; ++i) {
-            functions.emplace_back(
-                FunctionInfo{nullptr, types[read_leb128(iter)]});
+            uint32_t type_idx = safe_read_leb128<uint32_t>(iter);
+            functions.emplace_back(FunctionInfo{nullptr, types[type_idx]});
         }
     }
 
@@ -212,7 +214,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
     // todo: table section
     if (*iter == 4) {
         ++iter;
-        uint32_t section_length = read_leb128(iter);
+        uint32_t section_length = safe_read_leb128<uint32_t>(iter);
         iter += section_length;
     }
 
@@ -221,18 +223,19 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
     // memory section
     if (*iter == 5) {
         ++iter;
-        uint32_t section_length = read_leb128(iter);
+        uint32_t section_length = safe_read_leb128<uint32_t>(iter);
 
-        uint32_t n_memories = read_leb128(iter);
+        uint32_t n_memories = safe_read_leb128<uint32_t>(iter);
         assert(n_memories == 1);
 
         // Limits are encoded with a preceding flag indicating whether a maximum
         // is present.
-        uint32_t flags = read_leb128(iter);
+        uint32_t flags = safe_read_leb128<uint32_t>(iter);
         assert(flags == 0 || flags == 1);
 
-        uint32_t initial = read_leb128(iter);
-        uint32_t maximum = flags == 1 ? read_leb128(iter) : initial;
+        uint32_t initial = safe_read_leb128<uint32_t>(iter);
+        uint32_t maximum =
+            flags == 1 ? safe_read_leb128<uint32_t>(iter) : initial;
 
         new (&memory) WasmMemory(initial, maximum);
     }
@@ -242,8 +245,8 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
     // global section
     if (*iter == 6) {
         ++iter;
-        uint32_t section_length = read_leb128(iter);
-        uint32_t n_globals = read_leb128(iter);
+        uint32_t section_length = safe_read_leb128<uint32_t>(iter);
+        uint32_t n_globals = safe_read_leb128<uint32_t>(iter);
 
         globals.reserve(n_globals);
 
@@ -271,7 +274,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
     // todo: export section
     if (*iter == 7) {
         ++iter;
-        uint32_t section_length = read_leb128(iter);
+        uint32_t section_length = safe_read_leb128<uint32_t>(iter);
         iter += section_length;
     }
 
@@ -281,8 +284,8 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
     uint32_t start = -1;
     if (*iter == 8) {
         ++iter;
-        uint32_t section_length = read_leb128(iter);
-        start = read_leb128(iter);
+        uint32_t section_length = safe_read_leb128<uint32_t>(iter);
+        start = safe_read_leb128<uint32_t>(iter);
     }
 
     skip_custom_section();
@@ -290,7 +293,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
     // todo: element section
     if (*iter == 9) {
         ++iter;
-        uint32_t section_length = read_leb128(iter);
+        uint32_t section_length = safe_read_leb128<uint32_t>(iter);
         iter += section_length;
     }
 
@@ -299,13 +302,13 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
     // code section
     if (*iter == 10) {
         ++iter;
-        uint32_t section_length = read_leb128(iter);
-        uint32_t n_functions = read_leb128(iter);
+        uint32_t section_length = safe_read_leb128<uint32_t>(iter);
+        uint32_t n_functions = safe_read_leb128<uint32_t>(iter);
 
         functions.reserve(n_functions);
 
         for (uint32_t i = 0; i < n_functions; ++i) {
-            uint32_t function_length = read_leb128(iter);
+            uint32_t function_length = safe_read_leb128<uint32_t>(iter);
             functions[i].start = iter;
             iter += function_length;
         }
@@ -316,7 +319,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
     // todo: data section
     if (*iter == 11) {
         ++iter;
-        uint32_t section_length = read_leb128(iter);
+        uint32_t section_length = safe_read_leb128<uint32_t>(iter);
         iter += section_length;
     }
 
@@ -325,7 +328,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
     // todo: data count section
     if (*iter == 12) {
         ++iter;
-        uint32_t section_length = read_leb128(iter);
+        uint32_t section_length = safe_read_leb128<uint32_t>(iter);
         iter += section_length;
     }
 
