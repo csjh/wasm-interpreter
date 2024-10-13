@@ -20,7 +20,7 @@ void Validator::validate(uint8_t *&iter, const Signature &signature,
         is_func ? std::vector<valtype>{} : signature.params;
 
     auto push = [&](valtype ty) { stack.push_back(ty); };
-    auto push_many = [&](std::vector<valtype> &values) {
+    auto push_many = [&](const std::vector<valtype> &values) {
         stack.insert(stack.end(), values.begin(), values.end());
     };
     auto pop = [&](valtype ty) {
@@ -28,7 +28,7 @@ void Validator::validate(uint8_t *&iter, const Signature &signature,
         assert(stack.back() == ty);
         stack.pop_back();
     };
-    auto pop_many = [&](std::vector<valtype> &expected) {
+    auto pop_many = [&](const std::vector<valtype> &expected) {
         assert(expected.size() <= stack.size());
         assert(std::equal(expected.begin(), expected.end(),
                           stack.end() - expected.size()));
@@ -119,7 +119,7 @@ void Validator::validate(uint8_t *&iter, const Signature &signature,
         // else is basically an end to an if
         case else_:
         case end:
-            assert(signature.results == stack);
+            pop_many(signature.results);
             return;
         case br: {
             check_br(safe_read_leb128<uint32_t>(iter));
