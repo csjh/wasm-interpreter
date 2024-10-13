@@ -46,8 +46,8 @@ static inline bool is_mut(uint8_t byte) {
 
 static inline int64_t read_sleb128(uint8_t *&iter) {
     int64_t result = 0;
-    uint32_t shift = 0;
-    uint8_t byte;
+    uint64_t shift = 0;
+    uint64_t byte;
     do {
         byte = *iter++;
         result |= (byte & 0x7f) << shift;
@@ -70,8 +70,8 @@ static inline T safe_read_sleb128(uint8_t *&iter) {
 
 static inline uint64_t read_leb128(uint8_t *&iter) {
     uint64_t result = 0;
-    uint32_t shift = 0;
-    uint8_t byte;
+    uint64_t shift = 0;
+    uint64_t byte;
     do {
         byte = *iter++;
         result |= (byte & 0x7f) << shift;
