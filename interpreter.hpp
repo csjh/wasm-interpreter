@@ -4,6 +4,8 @@
 #include <cassert>
 #include <cstdint>
 #include <vector>
+#include <memory>
+#include <cstring>
 
 namespace Mitey {
 // technically unsigned versions don't exist but easier to use if they're here
@@ -80,7 +82,7 @@ class WasmMemory {
 
 struct WasmGlobal {
     valtype type;
-    mut mut;
+    mut _mut;
     WasmValue value;
 };
 
