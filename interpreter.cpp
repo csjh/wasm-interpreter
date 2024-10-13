@@ -1,4 +1,5 @@
 #include "interpreter.hpp"
+#include "validator.hpp"
 
 namespace Mitey {
 
@@ -178,12 +179,26 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
         uint32_t section_length = safe_read_leb128<uint32_t>(iter);
         uint32_t n_functions = safe_read_leb128<uint32_t>(iter);
 
-        functions.reserve(n_functions);
+        assert(n_functions == functions.size());
 
-        for (uint32_t i = 0; i < n_functions; ++i) {
+        for (FunctionInfo &fn : functions) {
+            fn.locals = fn.type.params;
+
             uint32_t function_length = safe_read_leb128<uint32_t>(iter);
-            functions[i].start = iter;
-            iter += function_length;
+            uint8_t *start = iter;
+
+            uint32_t n_local_decls = safe_read_leb128<uint32_t>(iter);
+            while (n_local_decls--) {
+                uint32_t n_locals = safe_read_leb128<uint32_t>(iter);
+                uint8_t type = *iter++;
+                assert(is_valtype(type));
+                while (n_locals--) {
+                    fn.locals.push_back(static_cast<valtype>(type));
+                }
+            }
+            fn.start = iter;
+
+            iter = start + function_length;
         }
     }
 
@@ -206,6 +221,8 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
     }
 
     skip_custom_section();
+
+    Validator(*this).validate();
 
     // run start function
 }
