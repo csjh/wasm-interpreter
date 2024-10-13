@@ -19,16 +19,22 @@ void Validator::validate(uint8_t *&iter, const Signature &signature,
     std::vector<valtype> stack =
         is_func ? std::vector<valtype>{} : signature.params;
 
+    bool is_unreachable = false;
+
     auto push = [&](valtype ty) { stack.push_back(ty); };
     auto push_many = [&](const std::vector<valtype> &values) {
         stack.insert(stack.end(), values.begin(), values.end());
     };
     auto pop = [&](valtype ty) {
+        if (is_unreachable)
+            return;
         assert(!stack.empty());
         assert(stack.back() == ty);
         stack.pop_back();
     };
     auto pop_many = [&](const std::vector<valtype> &expected) {
+        if (is_unreachable)
+            return;
         assert(expected.size() <= stack.size());
         assert(std::equal(expected.begin(), expected.end(),
                           stack.end() - expected.size()));
@@ -40,6 +46,8 @@ void Validator::validate(uint8_t *&iter, const Signature &signature,
     };
     auto check_br = [&](uint32_t depth) {
         assert(depth < control_stack.size());
+        if (is_unreachable)
+            return;
         auto &expected_at_target =
             control_stack[control_stack.size() - depth - 1];
         assert(expected_at_target.size() <= stack.size());
@@ -72,6 +80,7 @@ void Validator::validate(uint8_t *&iter, const Signature &signature,
         printf("reading instruction %#04x\n", byte);
         switch (static_cast<Instruction>(byte)) {
         case unreachable:
+            is_unreachable = true;
             break;
         case nop:
             break;
@@ -123,6 +132,7 @@ void Validator::validate(uint8_t *&iter, const Signature &signature,
             return;
         case br: {
             check_br(safe_read_leb128<uint32_t>(iter));
+            is_unreachable = true;
             break;
         }
         case br_if: {
@@ -140,10 +150,12 @@ void Validator::validate(uint8_t *&iter, const Signature &signature,
                 uint32_t target = safe_read_leb128<uint32_t>(iter);
                 check_br(target);
             }
+            is_unreachable = true;
             break;
         }
         case return_:
             check_br(control_stack.size() - 1);
+            is_unreachable = true;
             break;
         case call: {
             uint32_t fn_idx = safe_read_leb128<uint32_t>(iter);
