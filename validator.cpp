@@ -105,7 +105,8 @@ void Validator::validate(uint8_t *&iter, const Signature &signature,
 
             control_stack.push_back(signature.results);
             validate(iter, signature);
-            // validate else branch
+            // validate else branch if previous instruction was else
+            if (iter[-1] == static_cast<uint8_t>(else_))
             validate(iter, signature);
             control_stack.pop_back();
 
@@ -149,9 +150,17 @@ void Validator::validate(uint8_t *&iter, const Signature &signature,
             apply(fn.type);
             break;
         }
-        case call_indirect:
-            // todo
+        case call_indirect: {
+            pop(valtype::i32);
+
+            uint32_t table_idx = safe_read_leb128<uint32_t>(iter);
+            assert(table_idx == 0);
+
+            uint32_t type_idx = safe_read_leb128<uint32_t>(iter);
+            assert(type_idx < instance.types.size());
+            apply(instance.types[type_idx]);
             break;
+        }
         case drop:
             assert(!stack.empty());
             stack.pop_back();
@@ -205,7 +214,7 @@ void Validator::validate(uint8_t *&iter, const Signature &signature,
         case memorygrow: {
             uint32_t mem_idx = safe_read_leb128<uint32_t>(iter);
             assert(mem_idx == 0);
-            push(valtype::i32);
+            apply({{valtype::i32}, {valtype::i32}});
             break;
         }
         case i32const:

@@ -19,7 +19,7 @@ class Validator {
             ++iter;
             return {{}, {static_cast<valtype>(byte)}};
         } else {
-            int64_t n = -safe_read_sleb128<int64_t, 33>(iter);
+            int64_t n = safe_read_sleb128<int64_t, 33>(iter);
             assert(n >= 0);
             assert(n < instance.types.size());
             return instance.types[n];

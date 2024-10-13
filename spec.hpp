@@ -63,8 +63,8 @@ template <typename T, uint8_t bits = sizeof(T) * 8>
 static inline T safe_read_sleb128(uint8_t *&iter) {
     assert(bits / 8 <= sizeof(T));
     int64_t result = read_sleb128(iter);
-    assert(result <= static_cast<int64_t>((1LL << (bits - 1)) - 1));
-    assert(result >= static_cast<int64_t>(-(1LL << (bits - 1))));
+    assert(result <= static_cast<int64_t>((1ULL << (bits - 1)) - 1));
+    assert(result >= static_cast<int64_t>(-(1ULL << (bits - 1))));
     return static_cast<T>(result);
 }
 
@@ -84,7 +84,7 @@ template <typename T>
 static inline T safe_read_leb128(uint8_t *&iter, uint8_t bits = sizeof(T) * 8) {
     assert(bits / 8 <= sizeof(T));
     uint64_t result = read_leb128(iter);
-    assert(result <= (1ULL << bits) - 1);
+    assert(bits == 64 || result <= (1ULL << bits) - 1);
     return static_cast<T>(result);
 }
 
