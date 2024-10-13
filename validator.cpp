@@ -70,8 +70,7 @@ void Validator::validate(uint8_t *&iter, const std::vector<valtype> &expected) {
         case nop:
             break;
         case block: {
-            int64_t block_type = safe_read_sleb128<int64_t, 33>(iter);
-            Signature signature = from_blocktype(block_type);
+            Signature signature = read_blocktype(iter);
 
             pop_many(signature.params);
 
@@ -83,8 +82,7 @@ void Validator::validate(uint8_t *&iter, const std::vector<valtype> &expected) {
             break;
         }
         case loop: {
-            int64_t block_type = safe_read_sleb128<int64_t, 33>(iter);
-            Signature signature = from_blocktype(block_type);
+            Signature signature = read_blocktype(iter);
 
             pop_many(signature.params);
 
@@ -96,8 +94,7 @@ void Validator::validate(uint8_t *&iter, const std::vector<valtype> &expected) {
             break;
         }
         case if_: {
-            int64_t block_type = safe_read_sleb128<int64_t, 33>(iter);
-            Signature signature = from_blocktype(block_type);
+            Signature signature = read_blocktype(iter);
 
             pop_many(signature.params);
 
@@ -110,10 +107,10 @@ void Validator::validate(uint8_t *&iter, const std::vector<valtype> &expected) {
             push_many(signature.results);
             break;
         }
+        // else is basically an end to an if
         case else_:
-            return;
         case end:
-            // note: not break
+            assert(expected == stack);
             return;
         case br: {
             check_br(safe_read_leb128<uint32_t>(iter));
@@ -138,7 +135,7 @@ void Validator::validate(uint8_t *&iter, const std::vector<valtype> &expected) {
         }
         case return_:
             check_br(control_stack.size() - 1);
-            return;
+            break;
         case call: {
             uint32_t fn_idx = safe_read_leb128<uint32_t>(iter);
             assert(fn_idx < instance.functions.size());
