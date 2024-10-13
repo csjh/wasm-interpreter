@@ -181,7 +181,8 @@ void Validator::validate(uint8_t *&iter, const Signature &signature,
             stack.pop_back();
             break;
         case select: {
-            assert(stack.size() >= 3);
+            if (!is_unreachable)
+                assert(stack.size() >= 3);
             // first pop the condition
             pop(valtype::i32);
             valtype ty = stack.back();
