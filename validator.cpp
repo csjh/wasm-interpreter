@@ -14,45 +14,73 @@ void Validator::validate() {
     }
 }
 
+class WasmStack : protected std::vector<valtype> {
+    bool polymorphized = false;
+
+  public:
+    bool operator==(const std::vector<valtype> &rhs) {
+        pop(rhs);
+        return polymorphized || empty();
+    }
+
+    void polymorphize() {
+        polymorphized = true;
+        clear();
+    }
+
+    void push(valtype ty) { push(std::vector<valtype>{ty}); }
+    void push(const std::vector<valtype> &values) {
+        insert(end(), values.begin(), values.end());
+    }
+    void pop(valtype expected_ty) { pop(std::vector<valtype>{expected_ty}); }
+    void pop(const std::vector<valtype> &expected) {
+        assert(expected.size() <= size());
+
+        // due to stack polymorphism there might only be a few actual types on
+        // the stack
+        unsigned long materialized =
+            std::min(std::vector<valtype>::size(), expected.size());
+        assert(std::equal(expected.rbegin(), expected.rbegin() + materialized,
+                          rbegin()));
+        erase(end() - materialized, end());
+    }
+
+    bool empty() const {
+        return !polymorphized && std::vector<valtype>::empty();
+    }
+
+    valtype back() const {
+        assert(!empty());
+        // default to i32, shouldn't really matter
+        return std::vector<valtype>::empty() && polymorphized
+                   ? valtype::i32
+                   : std::vector<valtype>::back();
+    }
+
+    unsigned long size() const {
+        return polymorphized ? static_cast<unsigned long>(-1)
+                             : std::vector<valtype>::size();
+    }
+};
+
 void Validator::validate(uint8_t *&iter, const Signature &signature,
                          bool is_func) {
-    std::vector<valtype> stack =
-        is_func ? std::vector<valtype>{} : signature.params;
+    WasmStack stack;
+    if (!is_func) {
+        stack.push(signature.params);
+    }
 
-    bool is_unreachable = false;
-
-    auto push = [&](valtype ty) { stack.push_back(ty); };
-    auto push_many = [&](const std::vector<valtype> &values) {
-        stack.insert(stack.end(), values.begin(), values.end());
-    };
-    auto pop = [&](valtype ty) {
-        if (is_unreachable)
-            return;
-        assert(!stack.empty());
-        assert(stack.back() == ty);
-        stack.pop_back();
-    };
-    auto pop_many = [&](const std::vector<valtype> &expected) {
-        if (is_unreachable)
-            return;
-        assert(expected.size() <= stack.size());
-        assert(std::equal(expected.begin(), expected.end(),
-                          stack.end() - expected.size()));
-        stack.erase(stack.end() - expected.size(), stack.end());
-    };
     auto apply = [&](Signature signature) {
-        pop_many(signature.params);
-        push_many(signature.results);
+        stack.pop(signature.params);
+        stack.push(signature.results);
     };
+
     auto check_br = [&](uint32_t depth) {
         assert(depth < control_stack.size());
-        if (is_unreachable)
-            return;
         auto &expected_at_target =
             control_stack[control_stack.size() - depth - 1];
-        assert(expected_at_target.size() <= stack.size());
-        assert(std::equal(expected_at_target.begin(), expected_at_target.end(),
-                          stack.end() - expected_at_target.size()));
+        stack.pop(expected_at_target);
+        stack.push(expected_at_target);
     };
 
 #define LOAD(type, stacktype)                                                  \
@@ -77,43 +105,44 @@ void Validator::validate(uint8_t *&iter, const Signature &signature,
     while (1) {
         uint8_t byte = *iter++;
         assert(is_instruction(byte));
-        printf("reading instruction %#04x\n", byte);
+        // printf("reading instruction %#04x %ld\n", byte,
+        //        iter - instance.bytes.get());
         switch (static_cast<Instruction>(byte)) {
         case unreachable:
-            is_unreachable = true;
+            stack.polymorphize();
             break;
         case nop:
             break;
         case block: {
             Signature signature = read_blocktype(iter);
 
-            pop_many(signature.params);
+            stack.pop(signature.params);
 
             control_stack.push_back(signature.results);
             validate(iter, signature);
             control_stack.pop_back();
 
-            push_many(signature.results);
+            stack.push(signature.results);
             break;
         }
         case loop: {
             Signature signature = read_blocktype(iter);
 
-            pop_many(signature.params);
+            stack.pop(signature.params);
 
             control_stack.push_back(signature.params);
             validate(iter, signature);
             control_stack.pop_back();
 
-            push_many(signature.results);
+            stack.push(signature.results);
             break;
         }
         case if_: {
-            pop(valtype::i32);
+            stack.pop(valtype::i32);
 
             Signature signature = read_blocktype(iter);
 
-            pop_many(signature.params);
+            stack.pop(signature.params);
 
             control_stack.push_back(signature.results);
             validate(iter, signature);
@@ -122,27 +151,27 @@ void Validator::validate(uint8_t *&iter, const Signature &signature,
                 validate(iter, signature);
             control_stack.pop_back();
 
-            push_many(signature.results);
+            stack.push(signature.results);
             break;
         }
         // else is basically an end to an if
         case else_:
         case end:
-            if (!is_unreachable) assert(stack == signature.results);
+            assert(stack == signature.results);
             return;
         case br: {
             check_br(safe_read_leb128<uint32_t>(iter));
-            is_unreachable = true;
+            stack.polymorphize();
             break;
         }
         case br_if: {
-            pop(valtype::i32);
+            stack.pop(valtype::i32);
             uint32_t depth = safe_read_leb128<uint32_t>(iter);
             check_br(depth);
             break;
         }
         case br_table: {
-            pop(valtype::i32);
+            stack.pop(valtype::i32);
             uint32_t n_targets = safe_read_leb128<uint32_t>(iter);
 
             // <= because there's an extra for the default target
@@ -150,12 +179,12 @@ void Validator::validate(uint8_t *&iter, const Signature &signature,
                 uint32_t target = safe_read_leb128<uint32_t>(iter);
                 check_br(target);
             }
-            is_unreachable = true;
+            stack.polymorphize();
             break;
         }
         case return_:
             check_br(control_stack.size() - 1);
-            is_unreachable = true;
+            stack.polymorphize();
             break;
         case call: {
             uint32_t fn_idx = safe_read_leb128<uint32_t>(iter);
@@ -166,25 +195,25 @@ void Validator::validate(uint8_t *&iter, const Signature &signature,
             break;
         }
         case call_indirect: {
-            pop(valtype::i32);
+            stack.pop(valtype::i32);
+
+            uint32_t type_idx = safe_read_leb128<uint32_t>(iter);
+            assert(type_idx < instance.types.size());
 
             uint32_t table_idx = safe_read_leb128<uint32_t>(iter);
             assert(table_idx == 0);
 
-            uint32_t type_idx = safe_read_leb128<uint32_t>(iter);
-            assert(type_idx < instance.types.size());
             apply(instance.types[type_idx]);
             break;
         }
         case drop:
             assert(!stack.empty());
-            stack.pop_back();
+            stack.pop(stack.back());
             break;
         case select: {
-            if (!is_unreachable)
-                assert(stack.size() >= 3);
+            assert(stack.size() >= 3);
             // first pop the condition
-            pop(valtype::i32);
+            stack.pop(valtype::i32);
             valtype ty = stack.back();
             // then apply the dynamic type
             apply({{ty, ty}, {ty}});
@@ -193,38 +222,42 @@ void Validator::validate(uint8_t *&iter, const Signature &signature,
         case localget: {
             uint32_t local_idx = safe_read_leb128<uint32_t>(iter);
             assert(local_idx < current_fn.locals.size());
-            push(current_fn.locals[local_idx]);
+            valtype local_ty = current_fn.locals[local_idx];
+            apply({{}, {local_ty}});
             break;
         }
         case localset: {
             uint32_t local_idx = safe_read_leb128<uint32_t>(iter);
             assert(local_idx < current_fn.locals.size());
-            pop(current_fn.locals[local_idx]);
+            valtype local_ty = current_fn.locals[local_idx];
+            apply({{local_ty}, {}});
             break;
         }
         case localtee: {
             uint32_t local_idx = safe_read_leb128<uint32_t>(iter);
             assert(local_idx < current_fn.locals.size());
-            pop(current_fn.locals[local_idx]);
-            push(current_fn.locals[local_idx]);
+            valtype locaL_ty = current_fn.locals[local_idx];
+            apply({{locaL_ty}, {locaL_ty}});
             break;
         }
         case globalget: {
             uint32_t global_idx = safe_read_leb128<uint32_t>(iter);
             assert(global_idx < instance.globals.size());
-            push(instance.globals[global_idx].type);
+            valtype global_ty = instance.globals[global_idx].type;
+            apply({{}, {global_ty}});
             break;
         }
         case globalset: {
             uint32_t global_idx = safe_read_leb128<uint32_t>(iter);
             assert(global_idx < instance.globals.size());
-            pop(instance.globals[global_idx].type);
+            valtype global_ty = instance.globals[global_idx].type;
+            apply({{global_ty}, {}});
             break;
         }
         case memorysize: {
             uint32_t mem_idx = safe_read_leb128<uint32_t>(iter);
             assert(mem_idx == 0);
-            push(valtype::i32);
+            apply({{}, {valtype::i32}});
             break;
         }
         case memorygrow: {
@@ -234,21 +267,21 @@ void Validator::validate(uint8_t *&iter, const Signature &signature,
             break;
         }
         case i32const:
-            safe_read_leb128<uint32_t>(iter);
-            push(valtype::i32);
+            safe_read_sleb128<uint32_t>(iter);
+            apply({{}, {valtype::i32}});
             break;
         case i64const:
-            safe_read_leb128<uint64_t>(iter);
-            push(valtype::i64);
+            safe_read_sleb128<uint64_t>(iter);
+            apply({{}, {valtype::i64}});
             break;
         case f32const: {
             iter += sizeof(float);
-            push(valtype::f32);
+            apply({{}, {valtype::f32}});
             break;
         }
         case f64const:
             iter += sizeof(double);
-            push(valtype::f64);
+            apply({{}, {valtype::f64}});
             break;
         // clang-format off
         case i32load:     LOAD(uint32_t,  valtype::i32);
