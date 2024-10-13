@@ -6,13 +6,15 @@ void Validator::validate() {
     for (auto &fn : instance.functions) {
         current_fn = fn;
         uint8_t *iter = fn.start;
-        validate(iter, fn.type.results);
+        validate(iter, fn.type, true);
         assert(control_stack.empty());
     }
 }
 
-void Validator::validate(uint8_t *&iter, const std::vector<valtype> &expected) {
-    std::vector<valtype> stack;
+void Validator::validate(uint8_t *&iter, const Signature &signature,
+                         bool is_func) {
+    std::vector<valtype> stack =
+        is_func ? std::vector<valtype>{} : signature.params;
 
     auto push = [&](valtype ty) { stack.push_back(ty); };
     auto push_many = [&](std::vector<valtype> &values) {
@@ -64,6 +66,7 @@ void Validator::validate(uint8_t *&iter, const std::vector<valtype> &expected) {
     while (1) {
         uint8_t byte = *iter++;
         assert(is_instruction(byte));
+        printf("reading instruction %#04x\n", byte);
         switch (static_cast<Instruction>(byte)) {
         case unreachable:
             break;
@@ -75,7 +78,7 @@ void Validator::validate(uint8_t *&iter, const std::vector<valtype> &expected) {
             pop_many(signature.params);
 
             control_stack.push_back(signature.results);
-            validate(iter, signature.results);
+            validate(iter, signature);
             control_stack.pop_back();
 
             push_many(signature.results);
@@ -87,21 +90,23 @@ void Validator::validate(uint8_t *&iter, const std::vector<valtype> &expected) {
             pop_many(signature.params);
 
             control_stack.push_back(signature.params);
-            validate(iter, signature.results);
+            validate(iter, signature);
             control_stack.pop_back();
 
             push_many(signature.results);
             break;
         }
         case if_: {
+            pop(valtype::i32);
+
             Signature signature = read_blocktype(iter);
 
             pop_many(signature.params);
 
             control_stack.push_back(signature.results);
-            validate(iter, signature.results);
+            validate(iter, signature);
             // validate else branch
-            validate(iter, signature.results);
+            validate(iter, signature);
             control_stack.pop_back();
 
             push_many(signature.results);
@@ -110,7 +115,7 @@ void Validator::validate(uint8_t *&iter, const std::vector<valtype> &expected) {
         // else is basically an end to an if
         case else_:
         case end:
-            assert(expected == stack);
+            assert(signature.results == stack);
             return;
         case br: {
             check_br(safe_read_leb128<uint32_t>(iter));
@@ -367,10 +372,12 @@ void Validator::validate(uint8_t *&iter, const std::vector<valtype> &expected) {
         case f32reinterpret_i32: apply({{valtype::i32}, {valtype::f32}}); break;
         case i64reinterpret_f64: apply({{valtype::f64}, {valtype::i64}}); break;
         case f64reinterpret_i64: apply({{valtype::i64}, {valtype::f64}}); break;
-        default: __builtin_unreachable();
+        default: assert(false);
             // clang-format on
         };
     }
+
+    assert(false);
 }
 
 } // namespace Mitey
