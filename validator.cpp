@@ -5,9 +5,12 @@ namespace Mitey {
 void Validator::validate() {
     for (auto &fn : instance.functions) {
         current_fn = fn;
-        uint8_t *iter = fn.start;
-        validate(iter, fn.type, true);
-        assert(control_stack.empty());
+        control_stack.push_back(fn.type.results);
+
+        validate(fn.start, fn.type, true);
+
+        assert(control_stack.size() == 1);
+        control_stack.clear();
     }
 }
 
