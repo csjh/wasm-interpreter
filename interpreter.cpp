@@ -7,6 +7,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
                    uint32_t length)
     : bytes(std::move(_bytes)),
       stack(static_cast<WasmValue *>(malloc(stack_size))) {
+    // todo: use byte iterator or something
     uint8_t *iter = bytes.get();
     uint8_t *end = iter + length;
     assert(std::strncmp(reinterpret_cast<char *>(iter), "\0asm", 4) == 0);
