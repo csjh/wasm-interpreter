@@ -2,3 +2,4 @@
 wasm
 main
 test
+*.dSYM
