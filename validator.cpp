@@ -128,7 +128,7 @@ void Validator::validate(uint8_t *&iter, const Signature &signature,
         // else is basically an end to an if
         case else_:
         case end:
-            pop_many(signature.results);
+            if (!is_unreachable) assert(stack == signature.results);
             return;
         case br: {
             check_br(safe_read_leb128<uint32_t>(iter));
