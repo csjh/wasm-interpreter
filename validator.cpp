@@ -110,7 +110,7 @@ void Validator::validate(uint8_t *&iter, const Signature &signature,
             validate(iter, signature);
             // validate else branch if previous instruction was else
             if (iter[-1] == static_cast<uint8_t>(else_))
-            validate(iter, signature);
+                validate(iter, signature);
             control_stack.pop_back();
 
             push_many(signature.results);
