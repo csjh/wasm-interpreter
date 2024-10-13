@@ -1,10 +1,13 @@
 #pragma once
 
+#include <cassert>
 #include <cstdint>
 #include <vector>
 
 namespace Mitey {
-enum class valtype {
+enum class valtype : uint8_t {
+    empty = 0x40,
+
     // numtype
     i32 = 0x7f,
     i64 = 0x7e,
