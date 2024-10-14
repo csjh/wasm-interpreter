@@ -19,8 +19,8 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
     auto skip_custom_section = [&]() {
         while (iter != end && *iter == 0) [[unlikely]] {
             ++iter;
-            uint32_t length = *reinterpret_cast<uint32_t *>(iter);
-            iter += sizeof(uint32_t) + length;
+            uint32_t section_length = safe_read_leb128<uint32_t>(iter);
+            iter += section_length;
         }
     };
 
