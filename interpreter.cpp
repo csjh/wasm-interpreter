@@ -227,65 +227,6 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
     Validator(*this).validate();
 }
 
-template <uint32_t FunctionIndex, typename FuncPointer, typename... Args>
-std::invoke_result_t<FuncPointer, Args...> Instance::execute(Args... args) {
-    using ReturnType = std::invoke_result_t<FuncPointer, Args...>;
-
-    if (FunctionIndex >= functions.size()) {
-        throw std::out_of_range("Function index out of range");
-    }
-
-    const auto &fn = functions[FunctionIndex];
-
-    if (sizeof...(Args) != fn.type.params.size()) {
-        throw std::invalid_argument("Incorrect number of arguments");
-    }
-
-    (push_arg(args), ...);
-    invoke(FunctionIndex, nullptr);
-
-    return pop_result<ReturnType>();
-}
-
-template <typename T> inline constexpr bool always_false = false;
-
-// Helper function to push an argument onto the stack
-template <typename T> void Instance::push_arg(T arg) {
-    if constexpr (std::is_same_v<T, int32_t> || std::is_same_v<T, uint32_t>) {
-        *stack++ = static_cast<int32_t>(arg);
-    } else if constexpr (std::is_same_v<T, int64_t> ||
-                         std::is_same_v<T, uint64_t>) {
-        *stack++ = static_cast<int64_t>(arg);
-    } else if constexpr (std::is_same_v<T, float>) {
-        *stack++ = arg;
-    } else if constexpr (std::is_same_v<T, double>) {
-        *stack++ = arg;
-    } else {
-        static_assert(always_false<T>, "Unsupported argument type");
-    }
-}
-
-// Helper function to pop and return the result
-template <typename ReturnType> ReturnType Instance::pop_result() {
-    WasmValue result = *--stack;
-
-    if constexpr (std::is_same_v<ReturnType, int32_t>) {
-        return result.i32;
-    } else if constexpr (std::is_same_v<ReturnType, uint32_t>) {
-        return result.u32;
-    } else if constexpr (std::is_same_v<ReturnType, int64_t>) {
-        return result.i64;
-    } else if constexpr (std::is_same_v<ReturnType, uint64_t>) {
-        return result.u64;
-    } else if constexpr (std::is_same_v<ReturnType, float>) {
-        return result.f32;
-    } else if constexpr (std::is_same_v<ReturnType, double>) {
-        return result.f64;
-    } else {
-        static_assert(always_false<ReturnType>, "Unsupported return type");
-    }
-}
-
 void Instance::invoke(uint32_t idx, uint8_t *return_to) {
     FunctionInfo &fn = functions[idx];
     // parameters are the first locals and they're taken from the top of
