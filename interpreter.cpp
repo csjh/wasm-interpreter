@@ -2,11 +2,19 @@
 #include "validator.hpp"
 
 namespace Mitey {
+#ifdef WASM_DEBUG
+WasmValue *stack_start;
+#endif
 
 Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
                    uint32_t length)
     : bytes(std::move(_bytes)),
       stack(static_cast<WasmValue *>(malloc(stack_size))) {
+
+#ifdef WASM_DEBUG
+    stack_start = stack;
+#endif
+
     // todo: use byte iterator or something
     uint8_t *iter = bytes.get();
     uint8_t *end = iter + length;
@@ -308,7 +316,15 @@ void Instance::interpret(uint8_t *iter) {
 
     while (1) {
         uint8_t byte = *iter++;
-        assert(is_instruction(byte));
+#ifdef WASM_DEBUG
+        printf("reading instruction %s at %d\n", instructions[byte].c_str(),
+               iter - bytes.get());
+        printf("stack contents: ");
+        for (WasmValue *p = stack_start; p < stack; ++p) {
+            printf("%llu ", p->u64);
+        }
+        printf("\n\n");
+#endif
         switch (static_cast<Instruction>(byte)) {
         case unreachable:
             trap("unreachable");
