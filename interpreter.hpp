@@ -154,11 +154,17 @@ class Instance {
 
     void interpret(uint8_t *iter);
 
+    template <typename T> void push_arg(T arg);
+    template <typename ReturnType> ReturnType pop_result();
+
   public:
     Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> bytes,
              uint32_t length);
 
     ~Instance();
+
+    template <uint32_t FunctionIndex, typename FuncPointer, typename... Args>
+    std::invoke_result_t<FuncPointer, Args...> execute(Args... args);
 };
 
 constexpr uint32_t stack_size = 5 * 1024 * 1024; // 5mb
