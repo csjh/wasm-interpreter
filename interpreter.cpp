@@ -233,8 +233,6 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
     throw std::runtime_error(message);
 }
 
-void Instance::interpret(uint32_t offset) { interpret(bytes.get() + offset); }
-
 void Instance::interpret(uint8_t *iter) {
     auto push = [&](WasmValue value) { *stack++ = value; };
     auto pop = [&]() { return *--stack; };
