@@ -326,9 +326,9 @@ void Instance::interpret(uint8_t *iter) {
         std::vector<BrTarget> &control_stack = frame.control_stack;
         BrTarget target = control_stack[control_stack.size() - depth];
         control_stack.erase(control_stack.end() - depth, control_stack.end());
-        std::memcpy(target.stack, &stack[-target.arity],
+        std::memcpy(target.stack, stack - target.arity,
                     target.arity * sizeof(WasmValue));
-        stack = target.stack;
+        stack = target.stack + target.arity;
         iter = target.dest;
         return control_stack.empty();
     };
@@ -382,9 +382,12 @@ void Instance::interpret(uint8_t *iter) {
             break;
         }
         case loop: {
+            // reading blocktype each time maybe not efficient?
+            uint8_t *loop_start = iter - 1;
             Signature sn = read_blocktype(iter);
             frame.control_stack.push_back(
-                {stack - sn.params.size(), iter,
+                // iter - 1 so br goes back to the loop
+                {stack - sn.params.size(), loop_start,
                  static_cast<uint32_t>(sn.params.size())});
             break;
         }
@@ -398,7 +401,11 @@ void Instance::interpret(uint8_t *iter) {
             break;
         }
         case else_:
-            // control stack mutation is done in if handling
+            // if the else block is reached, the if block is done
+            // might be faster to have another dictionary for else block -> end
+            // so this can just be iter = end_block
+            // todo: look at what compiler optimizes to
+            brk(0);
             break;
         case end:
             frame.control_stack.pop_back();
@@ -460,7 +467,7 @@ void Instance::interpret(uint8_t *iter) {
             frame.locals[read_leb128(iter)] = pop();
             break;
         case localtee:
-            frame.locals[read_leb128(iter)] = *stack;
+            push(frame.locals[read_leb128(iter)] = pop());
             break;
         case globalget:
             push(globals[read_leb128(iter)].value);
