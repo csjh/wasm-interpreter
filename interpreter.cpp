@@ -289,9 +289,19 @@ void Instance::interpret(uint8_t *iter) {
     push(fn(pop().type));                                                      \
     break
 #define BINARY_OP(type, op)                                                    \
-    push(pop().type op pop().type);                                            \
-    break
-#define BINARY_FN(type, fn) push(fn(pop().type, pop().type));
+    {                                                                          \
+        auto rhs = pop().type;                                                 \
+        auto lhs = pop().type;                                                 \
+        push(lhs op rhs);                                                      \
+        break;                                                                 \
+    }
+#define BINARY_FN(type, fn)                                                    \
+    {                                                                          \
+        auto rhs = pop().type;                                                 \
+        auto lhs = pop().type;                                                 \
+        push(fn(lhs, rhs));                                                    \
+        break;                                                                 \
+    }
 
 #define LOAD(type)                                                             \
     {                                                                          \
