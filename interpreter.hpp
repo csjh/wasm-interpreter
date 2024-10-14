@@ -208,9 +208,18 @@ template <typename T> void Instance::push_arg(T arg) {
     }
 }
 
+template <typename T> struct function_traits;
+
+template <typename R, typename... Args> struct function_traits<R (*)(Args...)> {
+    using args = std::tuple<Args...>;
+    using return_type = R;
+};
+
 template <uint32_t FunctionIndex, typename FuncPointer, typename... Args>
 std::invoke_result_t<FuncPointer, Args...> Instance::execute(Args... args) {
-    using ReturnType = std::invoke_result_t<FuncPointer, Args...>;
+    using Fn = function_traits<FuncPointer>;
+    using FnArgs = Fn::args;
+    using ReturnType = Fn::return_type;
 
     if (FunctionIndex >= functions.size()) {
         throw std::out_of_range("Function index out of range");
@@ -222,7 +231,9 @@ std::invoke_result_t<FuncPointer, Args...> Instance::execute(Args... args) {
         throw std::invalid_argument("Incorrect number of arguments");
     }
 
-    (push_arg(args), ...);
+    // push arguments onto the stack, casting to FnArgs
+    std::apply([&](auto... arg) { (push_arg(arg), ...); }, FnArgs(args...));
+
     invoke(FunctionIndex, nullptr);
 
     return pop_result<ReturnType>();
