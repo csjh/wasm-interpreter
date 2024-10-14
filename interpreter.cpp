@@ -225,7 +225,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
     skip_custom_section();
 
     Validator(*this).validate();
-
+}
 
 template <uint32_t FunctionIndex, typename FuncPointer, typename... Args>
 std::invoke_result_t<FuncPointer, Args...> Instance::execute(Args... args) {
