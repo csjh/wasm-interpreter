@@ -250,18 +250,15 @@ void Instance::interpret(uint8_t *iter) {
         exit from block          -> valid if stack == return_type
     */
     auto brk = [&](uint32_t depth) {
-        if (depth == frame.control_stack.size()) {
-            return true;
-        } else {
-            depth++;
-            std::vector<BrTarget> &control_stack = frame.control_stack;
-            BrTarget target = control_stack[control_stack.size() - depth];
-            control_stack.erase(control_stack.end() - depth,
-                                control_stack.end());
-            stack = target.stack;
-            iter = target.dest;
-            return false;
-        }
+        depth++;
+        std::vector<BrTarget> &control_stack = frame.control_stack;
+        BrTarget target = control_stack[control_stack.size() - depth];
+        control_stack.erase(control_stack.end() - depth, control_stack.end());
+        std::memcpy(target.stack, &stack[-target.arity],
+                    target.arity * sizeof(WasmValue));
+        stack = target.stack;
+        iter = target.dest;
+        return control_stack.empty();
     };
 
 #define UNARY_OP(type, op)                                                     \
@@ -308,18 +305,22 @@ void Instance::interpret(uint8_t *iter) {
         case block: {
             Signature sn = read_blocktype(iter);
             frame.control_stack.push_back(
-                {stack - sn.params.size(), block_ends[iter]});
+                {stack - sn.results.size(), block_ends[iter],
+                 static_cast<uint32_t>(sn.results.size())});
             break;
         }
         case loop: {
             Signature sn = read_blocktype(iter);
-            frame.control_stack.push_back({stack - sn.params.size(), iter});
+            frame.control_stack.push_back(
+                {stack - sn.params.size(), iter,
+                 static_cast<uint32_t>(sn.params.size())});
             break;
         }
         case if_: {
             Signature sn = read_blocktype(iter);
             frame.control_stack.push_back(
-                {stack - sn.params.size(), if_jumps[iter].end});
+                {stack - sn.results.size(), if_jumps[iter].end,
+                 static_cast<uint32_t>(sn.results.size())});
             if (!pop().i32)
                 iter = if_jumps[iter].else_;
             break;
@@ -375,7 +376,10 @@ void Instance::interpret(uint8_t *iter) {
             // zero out non-parameter locals
             std::memset(stack, 0, (locals_end - stack) * sizeof(WasmValue));
             stack = locals_end;
-            frame = StackFrame{locals_start, {{locals_start, iter}}};
+            frame =
+                StackFrame{locals_start,
+                           {{locals_start, iter,
+                             static_cast<uint32_t>(fn.type.results.size())}}};
             interpret(fn.start);
             frame = prev;
             break;

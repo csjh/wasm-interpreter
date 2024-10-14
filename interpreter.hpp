@@ -96,6 +96,7 @@ struct FunctionInfo {
 struct BrTarget {
     WasmValue *stack;
     uint8_t *dest;
+    uint32_t arity;
 };
 
 struct StackFrame {
