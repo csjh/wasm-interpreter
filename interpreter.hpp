@@ -157,6 +157,8 @@ class Instance {
     template <typename T> void push_arg(T arg);
     template <typename ReturnType> ReturnType pop_result();
 
+    void invoke(uint32_t index, uint8_t *return_to);
+
   public:
     Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> bytes,
              uint32_t length);

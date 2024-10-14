@@ -235,16 +235,14 @@ std::invoke_result_t<FuncPointer, Args...> Instance::execute(Args... args) {
         throw std::out_of_range("Function index out of range");
     }
 
-    const auto &func = functions[FunctionIndex];
+    const auto &fn = functions[FunctionIndex];
 
-    if (sizeof...(Args) != func.type.params.size()) {
+    if (sizeof...(Args) != fn.type.params.size()) {
         throw std::invalid_argument("Incorrect number of arguments");
     }
 
-    frame = StackFrame{stack, {{stack, nullptr}}};
     (push_arg(args), ...);
-
-    interpret(func.start);
+    invoke(FunctionIndex, nullptr);
 
     return pop_result<ReturnType>();
 }
@@ -286,6 +284,23 @@ template <typename ReturnType> ReturnType Instance::pop_result() {
     } else {
         static_assert(always_false<ReturnType>, "Unsupported return type");
     }
+}
+
+void Instance::invoke(uint32_t idx, uint8_t *return_to) {
+    FunctionInfo &fn = functions[idx];
+    // parameters are the first locals and they're taken from the top of
+    // the stack
+    StackFrame prev = frame;
+    WasmValue *locals_start = stack - fn.type.params.size();
+    WasmValue *locals_end = locals_start + fn.locals.size();
+    // zero out non-parameter locals
+    std::memset(stack, 0, (locals_end - stack) * sizeof(WasmValue));
+    stack = locals_end;
+    frame = StackFrame{locals_start,
+                       {{locals_start, return_to,
+                         static_cast<uint32_t>(fn.type.results.size())}}};
+    interpret(fn.start);
+    frame = prev;
 }
 
 [[noreturn]] void trap(std::string message) {
@@ -424,21 +439,7 @@ void Instance::interpret(uint8_t *iter) {
             brk(frame.control_stack.size());
             return;
         case call: {
-            FunctionInfo &fn = functions[read_leb128(iter)];
-            // parameters are the first locals and they're taken from the top of
-            // the stack
-            StackFrame prev = frame;
-            WasmValue *locals_start = stack - fn.type.params.size();
-            WasmValue *locals_end = locals_start + fn.locals.size();
-            // zero out non-parameter locals
-            std::memset(stack, 0, (locals_end - stack) * sizeof(WasmValue));
-            stack = locals_end;
-            frame =
-                StackFrame{locals_start,
-                           {{locals_start, iter,
-                             static_cast<uint32_t>(fn.type.results.size())}}};
-            interpret(fn.start);
-            frame = prev;
+            invoke(read_leb128(iter), iter);
             break;
         }
         case call_indirect:
