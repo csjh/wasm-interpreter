@@ -3,11 +3,12 @@
 namespace Mitey {
 
 void Validator::validate() {
-    for (auto &fn : instance.functions) {
+    for (const auto &fn : instance.functions) {
         current_fn = fn;
         control_stack.push_back(fn.type.results);
 
-        validate(fn.start, fn.type, true);
+        uint8_t *iter = fn.start;
+        validate(iter, fn.type, true);
 
         assert(control_stack.size() == 1);
         control_stack.clear();
@@ -114,19 +115,23 @@ void Validator::validate(uint8_t *&iter, const Signature &signature,
         case nop:
             break;
         case block: {
-            Signature signature = read_blocktype(iter);
+            Signature signature = instance.read_blocktype(iter);
 
             stack.pop(signature.params);
+
+            uint8_t *block_start = iter;
 
             control_stack.push_back(signature.results);
             validate(iter, signature);
             control_stack.pop_back();
 
+            instance.block_ends[block_start] = iter;
+
             stack.push(signature.results);
             break;
         }
         case loop: {
-            Signature signature = read_blocktype(iter);
+            Signature signature = instance.read_blocktype(iter);
 
             stack.pop(signature.params);
 
@@ -140,16 +145,21 @@ void Validator::validate(uint8_t *&iter, const Signature &signature,
         case if_: {
             stack.pop(valtype::i32);
 
-            Signature signature = read_blocktype(iter);
+            Signature signature = instance.read_blocktype(iter);
 
             stack.pop(signature.params);
 
+            uint8_t *if_start = iter;
+
             control_stack.push_back(signature.results);
             validate(iter, signature);
+            uint8_t *else_start = iter;
             // validate else branch if previous instruction was else
             if (iter[-1] == static_cast<uint8_t>(else_))
                 validate(iter, signature);
             control_stack.pop_back();
+
+            instance.if_jumps[if_start] = {else_start, iter};
 
             stack.push(signature.results);
             break;

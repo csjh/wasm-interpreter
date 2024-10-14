@@ -3,9 +3,10 @@
 #include "spec.hpp"
 #include <cassert>
 #include <cstdint>
-#include <vector>
-#include <memory>
 #include <cstring>
+#include <memory>
+#include <unordered_map>
+#include <vector>
 
 namespace Mitey {
 // technically unsigned versions don't exist but easier to use if they're here
@@ -92,11 +93,21 @@ struct FunctionInfo {
     std::vector<valtype> locals;
 };
 
+struct BrTarget {
+    WasmValue *stack;
+    uint8_t *dest;
+};
+
 struct StackFrame {
     // locals (points to somewhere in the stack allocation)
     WasmValue *locals;
     // control stack (pointers to the place a br jumps to)
-    std::vector<uint8_t *> control_stack;
+    std::vector<BrTarget> control_stack;
+};
+
+struct IfJump {
+    uint8_t *else_;
+    uint8_t *end;
 };
 
 class Instance {
@@ -109,8 +120,13 @@ class Instance {
     // internal stack
     WasmValue *stack;
     // function-specific frames
-    std::vector<StackFrame> frames;
+    StackFrame frame;
+    // function info
     std::vector<FunctionInfo> functions;
+    // locations of if else/end instructions
+    std::unordered_map<uint8_t *, IfJump> if_jumps;
+    // locations of block end instructions
+    std::unordered_map<uint8_t *, uint8_t *> block_ends;
     // value of globals
     std::vector<WasmGlobal> globals;
     // maps indices to the start of the function (mutable)
@@ -119,7 +135,22 @@ class Instance {
     std::vector<uint8_t *> elements;
     std::vector<Signature> types;
 
-    void interpret(uint32_t offset);
+    Signature read_blocktype(uint8_t *&iter) {
+        uint8_t byte = *iter;
+        if (byte == static_cast<uint8_t>(valtype::empty)) {
+            ++iter;
+            return {{}, {}};
+        } else if (is_valtype(byte)) {
+            ++iter;
+            return {{}, {static_cast<valtype>(byte)}};
+        } else {
+            int64_t n = safe_read_sleb128<int64_t, 33>(iter);
+            assert(n >= 0);
+            assert(n < types.size());
+            return types[n];
+        }
+    }
+
     void interpret(uint8_t *iter);
 
   public:

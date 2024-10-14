@@ -250,16 +250,16 @@ void Instance::interpret(uint8_t *iter) {
         exit from block          -> valid if stack == return_type
     */
     auto brk = [&](uint32_t depth) {
-        if (depth == frames.back().control_stack.size()) {
-            frames.pop_back();
+        if (depth == frame.control_stack.size()) {
             return true;
         } else {
             depth++;
-            std::vector<uint8_t *> &control_stack = frames.back().control_stack;
-            uint8_t *target = control_stack[control_stack.size() - depth];
+            std::vector<BrTarget> &control_stack = frame.control_stack;
+            BrTarget target = control_stack[control_stack.size() - depth];
             control_stack.erase(control_stack.end() - depth,
                                 control_stack.end());
-            interpret(target);
+            stack = target.stack;
+            iter = target.dest;
             return false;
         }
     };
@@ -306,29 +306,30 @@ void Instance::interpret(uint8_t *iter) {
         case nop:
             break;
         case block: {
-            uint32_t block_type = read_leb128(iter);
-            frames.back().control_stack.push_back(
-                /* corresponding end instruction */ nullptr);
+            Signature sn = read_blocktype(iter);
+            frame.control_stack.push_back(
+                {stack - sn.params.size(), block_ends[iter]});
             break;
         }
         case loop: {
-            uint32_t block_type = read_leb128(iter);
-            frames.back().control_stack.push_back(iter);
+            Signature sn = read_blocktype(iter);
+            frame.control_stack.push_back({stack - sn.params.size(), iter});
             break;
         }
-        case if_:
-            frames.back().control_stack.push_back(
-                /* corresponding end instruction */ nullptr);
-
-            // note: need to store 2 values per if: the start of else,
-            // and the end instruction
+        case if_: {
+            Signature sn = read_blocktype(iter);
+            frame.control_stack.push_back(
+                {stack - sn.params.size(), if_jumps[iter].end});
+            if (!pop().i32)
+                iter = if_jumps[iter].else_;
             break;
+        }
         case else_:
-            // control stack mutation isn't is done in if handling
+            // control stack mutation is done in if handling
             break;
         case end:
-            frames.back().control_stack.pop_back();
-            if (frames.back().control_stack.empty())
+            frame.control_stack.pop_back();
+            if (frame.control_stack.empty())
                 return;
             break;
         case br: {
@@ -362,14 +363,21 @@ void Instance::interpret(uint8_t *iter) {
             break;
         }
         case return_:
-            assert(brk(frames.back().control_stack.size()));
+            brk(frame.control_stack.size());
             return;
         case call: {
             FunctionInfo &fn = functions[read_leb128(iter)];
             // parameters are the first locals and they're taken from the top of
             // the stack
-            frames.push_back(StackFrame{stack - fn.type.params.size(), {}});
+            StackFrame prev = frame;
+            WasmValue *locals_start = stack - fn.type.params.size();
+            WasmValue *locals_end = locals_start + fn.locals.size();
+            // zero out non-parameter locals
+            std::memset(stack, 0, (locals_end - stack) * sizeof(WasmValue));
+            stack = locals_end;
+            frame = StackFrame{locals_start, {{locals_start, iter}}};
             interpret(fn.start);
+            frame = prev;
             break;
         }
         case call_indirect:
@@ -384,13 +392,13 @@ void Instance::interpret(uint8_t *iter) {
             break;
         }
         case localget:
-            push(frames.back().locals[read_leb128(iter)]);
+            push(frame.locals[read_leb128(iter)]);
             break;
         case localset:
-            frames.back().locals[read_leb128(iter)] = pop();
+            frame.locals[read_leb128(iter)] = pop();
             break;
         case localtee:
-            frames.back().locals[read_leb128(iter)] = *stack;
+            frame.locals[read_leb128(iter)] = *stack;
             break;
         case globalget:
             push(globals[read_leb128(iter)].value);
