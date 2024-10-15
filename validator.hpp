@@ -2,6 +2,11 @@
 
 namespace Mitey {
 
+class validation_error : public std::runtime_error {
+  public:
+    validation_error(const std::string &msg) : std::runtime_error(msg) {}
+};
+
 class Validator {
     Instance &instance;
     FunctionInfo current_fn;

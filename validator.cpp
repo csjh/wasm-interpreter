@@ -2,6 +2,17 @@
 
 namespace Mitey {
 
+static inline void _ensure(bool condition, const std::string &expr, int line,
+                           const std::string &file, const std::string &msg) {
+    if (!condition) [[unlikely]] {
+        throw validation_error("validation error: " + msg + " (" + expr + ") " +
+                               file + ":" + std::to_string(line));
+    }
+}
+
+#define ensure(condition, msg)                                                 \
+    _ensure(condition, #condition, __LINE__, __FILE__, msg)
+
 void Validator::validate() {
     for (const auto &fn : instance.functions) {
         current_fn = fn;
@@ -10,7 +21,8 @@ void Validator::validate() {
         uint8_t *iter = fn.start;
         validate(iter, fn.type, true);
 
-        assert(control_stack.size() == 1);
+        ensure(control_stack.size() == 1,
+               "control stack not empty at end of function");
         control_stack.clear();
     }
 }
@@ -35,14 +47,15 @@ class WasmStack : protected std::vector<valtype> {
     }
     void pop(valtype expected_ty) { pop(std::vector<valtype>{expected_ty}); }
     void pop(const std::vector<valtype> &expected) {
-        assert(expected.size() <= size());
+        ensure(expected.size() <= size(), "not enough values on stack");
 
         // due to stack polymorphism there might only be a few actual types on
         // the stack
         unsigned long materialized =
             std::min(std::vector<valtype>::size(), expected.size());
-        assert(std::equal(expected.rbegin(), expected.rbegin() + materialized,
-                          rbegin()));
+        ensure(std::equal(expected.rbegin(), expected.rbegin() + materialized,
+                          rbegin()),
+               "values on stack don't match expected");
         erase(end() - materialized, end());
     }
 
@@ -51,7 +64,7 @@ class WasmStack : protected std::vector<valtype> {
     }
 
     valtype back() const {
-        assert(!empty());
+        ensure(!empty(), "stack is empty");
         // default to i32, shouldn't really matter
         return std::vector<valtype>::empty() && polymorphized
                    ? valtype::i32
@@ -77,7 +90,7 @@ void Validator::validate(uint8_t *&iter, const Signature &signature,
     };
 
     auto check_br = [&](uint32_t depth) {
-        assert(depth < control_stack.size());
+        ensure(depth < control_stack.size(), "invalid depth");
         auto &expected_at_target =
             control_stack[control_stack.size() - depth - 1];
         stack.pop(expected_at_target);
@@ -87,7 +100,7 @@ void Validator::validate(uint8_t *&iter, const Signature &signature,
 #define LOAD(type, stacktype)                                                  \
     {                                                                          \
         uint32_t align = 1 << safe_read_leb128<uint32_t>(iter);                \
-        assert(align <= 8 * sizeof(type));                                     \
+        ensure(align <= 8 * sizeof(type), "invalid alignment");                \
         /* uint32_t offset = */ safe_read_leb128<uint32_t>(iter);              \
         apply({{valtype::i32}, {stacktype}});                                  \
         break;                                                                 \
@@ -96,7 +109,7 @@ void Validator::validate(uint8_t *&iter, const Signature &signature,
 #define STORE(type, stacktype)                                                 \
     {                                                                          \
         uint32_t align = 1 << safe_read_leb128<uint32_t>(iter);                \
-        assert(align <= 8 * sizeof(type));                                     \
+        ensure(align <= 8 * sizeof(type), "invalid alignment");                \
         /* uint32_t offset = */ safe_read_leb128<uint32_t>(iter);              \
         apply({{valtype::i32, stacktype}, {}});                                \
         break;                                                                 \
@@ -105,7 +118,7 @@ void Validator::validate(uint8_t *&iter, const Signature &signature,
     using enum Instruction;
     while (1) {
         uint8_t byte = *iter++;
-        assert(is_instruction(byte));
+        ensure(is_instruction(byte), "invalid instruction");
         // printf("reading instruction %#04x %ld\n", byte,
         //        iter - instance.bytes.get());
         switch (static_cast<Instruction>(byte)) {
@@ -167,7 +180,7 @@ void Validator::validate(uint8_t *&iter, const Signature &signature,
         // else is basically an end to an if
         case else_:
         case end:
-            assert(stack == signature.results);
+            ensure(stack == signature.results, "stack doesn't match signature");
             return;
         case br: {
             check_br(safe_read_leb128<uint32_t>(iter));
@@ -198,7 +211,8 @@ void Validator::validate(uint8_t *&iter, const Signature &signature,
             break;
         case call: {
             uint32_t fn_idx = safe_read_leb128<uint32_t>(iter);
-            assert(fn_idx < instance.functions.size());
+            ensure(fn_idx < instance.functions.size(),
+                   "invalid function index");
 
             FunctionInfo &fn = instance.functions[fn_idx];
             apply(fn.type);
@@ -208,20 +222,20 @@ void Validator::validate(uint8_t *&iter, const Signature &signature,
             stack.pop(valtype::i32);
 
             uint32_t type_idx = safe_read_leb128<uint32_t>(iter);
-            assert(type_idx < instance.types.size());
+            ensure(type_idx < instance.types.size(), "invalid type index");
 
             uint32_t table_idx = safe_read_leb128<uint32_t>(iter);
-            assert(table_idx == 0);
+            ensure(table_idx == 0, "invalid table index");
 
             apply(instance.types[type_idx]);
             break;
         }
         case drop:
-            assert(!stack.empty());
+            ensure(!stack.empty(), "stack is empty");
             stack.pop(stack.back());
             break;
         case select: {
-            assert(stack.size() >= 3);
+            ensure(stack.size() >= 3, "not enough values on stack");
             // first pop the condition
             stack.pop(valtype::i32);
             valtype ty = stack.back();
@@ -231,48 +245,50 @@ void Validator::validate(uint8_t *&iter, const Signature &signature,
         }
         case localget: {
             uint32_t local_idx = safe_read_leb128<uint32_t>(iter);
-            assert(local_idx < current_fn.locals.size());
+            ensure(local_idx < current_fn.locals.size(), "invalid local index");
             valtype local_ty = current_fn.locals[local_idx];
             apply({{}, {local_ty}});
             break;
         }
         case localset: {
             uint32_t local_idx = safe_read_leb128<uint32_t>(iter);
-            assert(local_idx < current_fn.locals.size());
+            ensure(local_idx < current_fn.locals.size(), "invalid local index");
             valtype local_ty = current_fn.locals[local_idx];
             apply({{local_ty}, {}});
             break;
         }
         case localtee: {
             uint32_t local_idx = safe_read_leb128<uint32_t>(iter);
-            assert(local_idx < current_fn.locals.size());
+            ensure(local_idx < current_fn.locals.size(), "invalid local index");
             valtype locaL_ty = current_fn.locals[local_idx];
             apply({{locaL_ty}, {locaL_ty}});
             break;
         }
         case globalget: {
             uint32_t global_idx = safe_read_leb128<uint32_t>(iter);
-            assert(global_idx < instance.globals.size());
+            ensure(global_idx < instance.globals.size(),
+                   "invalid global index");
             valtype global_ty = instance.globals[global_idx].type;
             apply({{}, {global_ty}});
             break;
         }
         case globalset: {
             uint32_t global_idx = safe_read_leb128<uint32_t>(iter);
-            assert(global_idx < instance.globals.size());
+            ensure(global_idx < instance.globals.size(),
+                   "invalid global index");
             valtype global_ty = instance.globals[global_idx].type;
             apply({{global_ty}, {}});
             break;
         }
         case memorysize: {
             uint32_t mem_idx = safe_read_leb128<uint32_t>(iter);
-            assert(mem_idx == 0);
+            ensure(mem_idx == 0, "invalid memory index");
             apply({{}, {valtype::i32}});
             break;
         }
         case memorygrow: {
             uint32_t mem_idx = safe_read_leb128<uint32_t>(iter);
-            assert(mem_idx == 0);
+            ensure(mem_idx == 0, "invalid memory index");
             apply({{valtype::i32}, {valtype::i32}});
             break;
         }
@@ -440,12 +456,14 @@ void Validator::validate(uint8_t *&iter, const Signature &signature,
         case f32reinterpret_i32: apply({{valtype::i32}, {valtype::f32}}); break;
         case i64reinterpret_f64: apply({{valtype::f64}, {valtype::i64}}); break;
         case f64reinterpret_i64: apply({{valtype::i64}, {valtype::f64}}); break;
-        default: assert(false);
+        default: ensure(false, "unimplemented instruction");
             // clang-format on
         };
     }
 
-    assert(false);
+    ensure(false, "unreachable");
 }
+
+#undef ensure
 
 } // namespace Mitey
