@@ -1,5 +1,6 @@
 #include "interpreter.hpp"
 #include "validator.hpp"
+#include <limits>
 
 namespace Mitey {
 #ifdef WASM_DEBUG
@@ -37,7 +38,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
     // type section
     if (iter != end && *iter == 1) {
         ++iter;
-        uint32_t section_length = safe_read_leb128<uint32_t>(iter);
+        /* uint32_t section_length = */ safe_read_leb128<uint32_t>(iter);
         uint32_t n_types = safe_read_leb128<uint32_t>(iter);
 
         types.reserve(n_types);
@@ -82,7 +83,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
     // function type section
     if (iter != end && *iter == 3) {
         ++iter;
-        uint32_t section_length = safe_read_leb128<uint32_t>(iter);
+        /* uint32_t section_length = */ safe_read_leb128<uint32_t>(iter);
         uint32_t n_functions = safe_read_leb128<uint32_t>(iter);
 
         functions.reserve(n_functions);
@@ -107,7 +108,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
     // memory section
     if (iter != end && *iter == 5) {
         ++iter;
-        uint32_t section_length = safe_read_leb128<uint32_t>(iter);
+        /* uint32_t section_length = */ safe_read_leb128<uint32_t>(iter);
 
         uint32_t n_memories = safe_read_leb128<uint32_t>(iter);
         assert(n_memories == 1);
@@ -129,7 +130,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
     // global section
     if (iter != end && *iter == 6) {
         ++iter;
-        uint32_t section_length = safe_read_leb128<uint32_t>(iter);
+        /* uint32_t section_length = */ safe_read_leb128<uint32_t>(iter);
         uint32_t n_globals = safe_read_leb128<uint32_t>(iter);
 
         globals.reserve(n_globals);
@@ -165,10 +166,10 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
     skip_custom_section();
 
     // start section
-    uint32_t start = -1;
+    uint32_t start = std::numeric_limits<uint32_t>::max();
     if (iter != end && *iter == 8) {
         ++iter;
-        uint32_t section_length = safe_read_leb128<uint32_t>(iter);
+        /* uint32_t section_length = */ safe_read_leb128<uint32_t>(iter);
         start = safe_read_leb128<uint32_t>(iter);
     }
 
@@ -186,7 +187,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
     // code section
     if (iter != end && *iter == 10) {
         ++iter;
-        uint32_t section_length = safe_read_leb128<uint32_t>(iter);
+        /* uint32_t section_length = */ safe_read_leb128<uint32_t>(iter);
         uint32_t n_functions = safe_read_leb128<uint32_t>(iter);
 
         assert(n_functions == functions.size());
@@ -233,6 +234,10 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
     skip_custom_section();
 
     Validator(*this).validate();
+
+    if (start != std::numeric_limits<uint32_t>::max()) {
+        invoke(start, nullptr);
+    }
 }
 
 void Instance::invoke(uint32_t idx, uint8_t *return_to) {
@@ -327,7 +332,7 @@ void Instance::interpret(uint8_t *iter) {
     while (1) {
         uint8_t byte = *iter++;
 #ifdef WASM_DEBUG
-        printf("reading instruction %s at %d\n", instructions[byte].c_str(),
+        printf("reading instruction %s at %ld\n", instructions[byte].c_str(),
                iter - bytes.get());
         printf("stack contents: ");
         for (WasmValue *p = stack_start; p < stack; ++p) {
@@ -403,7 +408,7 @@ void Instance::interpret(uint8_t *iter) {
         case br_table: {
             uint32_t v = pop().u32;
             uint32_t n_targets = read_leb128(iter);
-            uint32_t target, depth = -1;
+            uint32_t target, depth = std::numeric_limits<uint32_t>::max();
 
             // <= because there's an extra for the default target
             for (uint32_t i = 0; i <= n_targets; ++i) {
@@ -412,7 +417,7 @@ void Instance::interpret(uint8_t *iter) {
                     depth = target;
             }
             // use default
-            if (depth == -1)
+            if (depth == std::numeric_limits<uint32_t>::max())
                 depth = target;
             if (brk(depth))
                 return;
@@ -452,12 +457,12 @@ void Instance::interpret(uint8_t *iter) {
             globals[read_leb128(iter)].value = pop();
             break;
         case memorysize: {
-            uint32_t mem_idx = read_leb128(iter);
+            /* uint32_t mem_idx = */ read_leb128(iter);
             push(memory.size());
             break;
         }
         case memorygrow: {
-            uint32_t mem_idx = read_leb128(iter);
+            /* uint32_t mem_idx = */ read_leb128(iter);
             push(memory.grow(pop().u32));
             break;
         }

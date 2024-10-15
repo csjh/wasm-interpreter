@@ -387,7 +387,7 @@ static std::string instructions[] = {
 #endif
 // clang-format on
 
-static inline bool is_instruction(uint8_t byte) {
+static inline bool is_instruction(uint8_t) {
     // todo: figure out best way for this
     return true;
 }

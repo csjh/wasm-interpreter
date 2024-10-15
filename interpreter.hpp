@@ -32,12 +32,12 @@ class WasmMemory {
     uint32_t maximum;
 
   public:
-    WasmMemory() : current(0), maximum(0), memory(nullptr) {}
+    WasmMemory() : memory(nullptr), current(0), maximum(0) {}
 
     WasmMemory(uint32_t initial, uint32_t maximum)
-        : current(initial), maximum(maximum),
-          memory(static_cast<uint8_t *>(
-              calloc(initial * 65536, sizeof(uint8_t)))) {}
+        : memory(
+              static_cast<uint8_t *>(calloc(initial * 65536, sizeof(uint8_t)))),
+          current(initial), maximum(maximum) {}
 
     ~WasmMemory() {
         if (memory) {
@@ -147,7 +147,7 @@ class Instance {
         } else {
             int64_t n = safe_read_sleb128<int64_t, 33>(iter);
             assert(n >= 0);
-            assert(n < types.size());
+            assert(static_cast<uint64_t>(n) < types.size());
             return types[n];
         }
     }
@@ -229,6 +229,10 @@ std::invoke_result_t<FuncPointer, Args...> Instance::execute(Args... args) {
 
     if (sizeof...(Args) != fn.type.params.size()) {
         throw std::invalid_argument("Incorrect number of arguments");
+    }
+
+    if (fn.type.results.size() != 1) {
+        throw std::invalid_argument("Incorrect number of results");
     }
 
     // push arguments onto the stack, casting to FnArgs

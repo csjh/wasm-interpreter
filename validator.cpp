@@ -88,7 +88,7 @@ void Validator::validate(uint8_t *&iter, const Signature &signature,
     {                                                                          \
         uint32_t align = 1 << safe_read_leb128<uint32_t>(iter);                \
         assert(align <= 8 * sizeof(type));                                     \
-        uint32_t offset = safe_read_leb128<uint32_t>(iter);                    \
+        /* uint32_t offset = */ safe_read_leb128<uint32_t>(iter);              \
         apply({{valtype::i32}, {stacktype}});                                  \
         break;                                                                 \
     }
@@ -97,7 +97,7 @@ void Validator::validate(uint8_t *&iter, const Signature &signature,
     {                                                                          \
         uint32_t align = 1 << safe_read_leb128<uint32_t>(iter);                \
         assert(align <= 8 * sizeof(type));                                     \
-        uint32_t offset = safe_read_leb128<uint32_t>(iter);                    \
+        /* uint32_t offset = */ safe_read_leb128<uint32_t>(iter);              \
         apply({{valtype::i32, stacktype}, {}});                                \
         break;                                                                 \
     }
