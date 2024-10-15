@@ -375,9 +375,18 @@ void Instance::interpret(uint8_t *iter) {
             brk(0);
             break;
         case end:
-            frame.control_stack.pop_back();
-            if (frame.control_stack.empty())
+            if (frame.control_stack.size() == 1) {
+                // function end block
+                brk(0);
                 return;
+            } else {
+                // we don't know if this is a block or loop
+                // so can't do brk(0)
+                // BUT validation has confirmed that the result is
+                // the only thing left on the stack, so we can just
+                // pop the control stack (since the result is already in place)
+                frame.control_stack.pop_back();
+            }
             break;
         case br: {
             if (brk(read_leb128(iter)))
