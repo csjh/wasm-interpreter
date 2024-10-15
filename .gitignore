@@ -1,5 +1,6 @@
 *.o
 wasm
 main
-test
+test/core/wast-json
+test/executor
 *.dSYM
