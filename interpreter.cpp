@@ -288,23 +288,21 @@ void Instance::interpret(uint8_t *iter) {
     };
 
 #define UNARY_OP(type, op)                                                     \
-    push(op pop().type);                                                       \
+    stack[-1] = op(stack[-1].type);                                            \
     break
 #define UNARY_FN(type, fn)                                                     \
-    push(fn(pop().type));                                                      \
+    stack[-1] = fn(stack[-1].type);                                            \
     break
 #define BINARY_OP(type, op)                                                    \
     {                                                                          \
-        auto rhs = pop().type;                                                 \
-        auto lhs = pop().type;                                                 \
-        push(lhs op rhs);                                                      \
+        stack--;                                                               \
+        stack[-1] = stack[-1].type op stack[0].type;                           \
         break;                                                                 \
     }
 #define BINARY_FN(type, fn)                                                    \
     {                                                                          \
-        auto rhs = pop().type;                                                 \
-        auto lhs = pop().type;                                                 \
-        push(fn(lhs, rhs));                                                    \
+        stack--;                                                               \
+        stack[-1] = fn(stack[-1].type, stack[0].type);                         \
         break;                                                                 \
     }
 
@@ -433,12 +431,11 @@ void Instance::interpret(uint8_t *iter) {
         case call_indirect:
             break;
         case drop:
-            pop();
+            stack--;
             break;
         case select: {
-            WasmValue vtrue = pop();
-            WasmValue vfalse = pop();
-            push(pop().i32 ? vtrue : vfalse);
+            stack -= 2;
+            stack[-1] = stack[-1].i32 ? stack[1] : stack[0];
             break;
         }
         case localget:
@@ -448,7 +445,7 @@ void Instance::interpret(uint8_t *iter) {
             frame.locals[read_leb128(iter)] = pop();
             break;
         case localtee:
-            push(frame.locals[read_leb128(iter)] = pop());
+            frame.locals[read_leb128(iter)] = stack[-1];
             break;
         case globalget:
             push(globals[read_leb128(iter)].value);
@@ -463,7 +460,7 @@ void Instance::interpret(uint8_t *iter) {
         }
         case memorygrow: {
             /* uint32_t mem_idx = */ read_leb128(iter);
-            push(memory.grow(pop().u32));
+            stack[-1].u32 = memory.grow(stack[-1].u32);
             break;
         }
         case i32const:
@@ -644,7 +641,7 @@ void Instance::interpret(uint8_t *iter) {
 #undef BINARY_FN
 #undef LOAD
 #undef STORE
-}
+} // namespace Mitey
 
 // todo: this should check stack is the base pointer
 // won't be necessary after validation is added
