@@ -121,7 +121,7 @@ class Instance {
     // internal stack
     WasmValue *stack;
     // function-specific frames
-    StackFrame frame;
+    std::vector<StackFrame> frames;
     // function info
     std::vector<FunctionInfo> functions;
     // locations of if else/end instructions
@@ -152,12 +152,13 @@ class Instance {
         }
     }
 
+    void prepare_to_call(const FunctionInfo &idx, uint8_t *return_to);
     void interpret(uint8_t *iter);
 
     template <typename T> void push_arg(T arg);
     template <typename ReturnType> ReturnType pop_result();
 
-    void invoke(uint32_t index, uint8_t *return_to);
+    StackFrame &frame() { return frames.back(); }
 
   public:
     Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> bytes,
@@ -165,8 +166,9 @@ class Instance {
 
     ~Instance();
 
-    template <uint32_t FunctionIndex, typename FuncPointer, typename... Args>
-    std::invoke_result_t<FuncPointer, Args...> execute(Args... args);
+    template <typename FuncPointer, typename... Args>
+    std::invoke_result_t<FuncPointer, Args...> execute(uint32_t idx,
+                                                       Args... args);
 };
 
 template <typename T> inline constexpr bool always_false = false;
@@ -215,17 +217,18 @@ template <typename R, typename... Args> struct function_traits<R (*)(Args...)> {
     using return_type = R;
 };
 
-template <uint32_t FunctionIndex, typename FuncPointer, typename... Args>
-std::invoke_result_t<FuncPointer, Args...> Instance::execute(Args... args) {
+template <typename FuncPointer, typename... Args>
+std::invoke_result_t<FuncPointer, Args...> Instance::execute(uint32_t idx,
+                                                             Args... args) {
     using Fn = function_traits<FuncPointer>;
     using FnArgs = Fn::args;
     using ReturnType = Fn::return_type;
 
-    if (FunctionIndex >= functions.size()) {
+    if (idx >= functions.size()) {
         throw std::out_of_range("Function index out of range");
     }
 
-    const auto &fn = functions[FunctionIndex];
+    const auto &fn = functions[idx];
 
     if (sizeof...(Args) != fn.type.params.size()) {
         throw std::invalid_argument("Incorrect number of arguments");
@@ -238,9 +241,12 @@ std::invoke_result_t<FuncPointer, Args...> Instance::execute(Args... args) {
     // push arguments onto the stack, casting to FnArgs
     std::apply([&](auto... arg) { (push_arg(arg), ...); }, FnArgs(args...));
 
-    invoke(FunctionIndex, nullptr);
+    prepare_to_call(fn, nullptr);
+    interpret(fn.start);
 
-    return pop_result<ReturnType>();
+    if constexpr (!std::is_same_v<ReturnType, void>) {
+        return pop_result<ReturnType>();
+    }
 }
 
 constexpr uint32_t stack_size = 5 * 1024 * 1024; // 5mb

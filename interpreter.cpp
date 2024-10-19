@@ -236,25 +236,22 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
     Validator(*this).validate();
 
     if (start != std::numeric_limits<uint32_t>::max()) {
-        invoke(start, nullptr);
+        execute<void (*)()>(start);
     }
 }
 
-void Instance::invoke(uint32_t idx, uint8_t *return_to) {
-    FunctionInfo &fn = functions[idx];
+void Instance::prepare_to_call(const FunctionInfo &fn, uint8_t *return_to) {
     // parameters are the first locals and they're taken from the top of
     // the stack
-    StackFrame prev = frame;
     WasmValue *locals_start = stack - fn.type.params.size();
     WasmValue *locals_end = locals_start + fn.locals.size();
     // zero out non-parameter locals
     std::memset(stack, 0, (locals_end - stack) * sizeof(WasmValue));
     stack = locals_end;
-    frame = StackFrame{locals_start,
-                       {{locals_start, return_to,
-                         static_cast<uint32_t>(fn.type.results.size())}}};
-    interpret(fn.start);
-    frame = prev;
+    frames.emplace_back(
+        StackFrame{locals_start,
+                   {{locals_start, return_to,
+                     static_cast<uint32_t>(fn.type.results.size())}}});
 }
 
 [[noreturn]] void trap(std::string message) {
@@ -277,14 +274,19 @@ void Instance::interpret(uint8_t *iter) {
     */
     auto brk = [&](uint32_t depth) {
         depth++;
-        std::vector<BrTarget> &control_stack = frame.control_stack;
+        std::vector<BrTarget> &control_stack = frame().control_stack;
         BrTarget target = control_stack[control_stack.size() - depth];
         control_stack.erase(control_stack.end() - depth, control_stack.end());
         std::memcpy(target.stack, stack - target.arity,
                     target.arity * sizeof(WasmValue));
         stack = target.stack + target.arity;
         iter = target.dest;
-        return control_stack.empty();
+        if (control_stack.empty()) {
+            frames.pop_back();
+            return frames.empty();
+        } else {
+            return false;
+        }
     };
 
 #define UNARY_OP(type, op)                                                     \
@@ -346,7 +348,7 @@ void Instance::interpret(uint8_t *iter) {
             break;
         case block: {
             Signature sn = read_blocktype(iter);
-            frame.control_stack.push_back(
+            frame().control_stack.push_back(
                 {stack - sn.results.size(), block_ends[iter],
                  static_cast<uint32_t>(sn.results.size())});
             break;
@@ -355,7 +357,7 @@ void Instance::interpret(uint8_t *iter) {
             // reading blocktype each time maybe not efficient?
             uint8_t *loop_start = iter - 1;
             Signature sn = read_blocktype(iter);
-            frame.control_stack.push_back(
+            frame().control_stack.push_back(
                 // iter - 1 so br goes back to the loop
                 {stack - sn.params.size(), loop_start,
                  static_cast<uint32_t>(sn.params.size())});
@@ -363,7 +365,7 @@ void Instance::interpret(uint8_t *iter) {
         }
         case if_: {
             Signature sn = read_blocktype(iter);
-            frame.control_stack.push_back(
+            frame().control_stack.push_back(
                 {stack - sn.results.size(), if_jumps[iter].end,
                  static_cast<uint32_t>(sn.results.size())});
             if (!pop().i32)
@@ -378,17 +380,17 @@ void Instance::interpret(uint8_t *iter) {
             brk(0);
             break;
         case end:
-            if (frame.control_stack.size() == 1) {
+            if (frame().control_stack.size() == 1) {
                 // function end block
-                brk(0);
-                return;
+                if (brk(0))
+                    return;
             } else {
                 // we don't know if this is a block or loop
                 // so can't do brk(0)
                 // BUT validation has confirmed that the result is
                 // the only thing left on the stack, so we can just
                 // pop the control stack (since the result is already in place)
-                frame.control_stack.pop_back();
+                frame().control_stack.pop_back();
             }
             break;
         case br: {
@@ -422,10 +424,12 @@ void Instance::interpret(uint8_t *iter) {
             break;
         }
         case return_:
-            brk(frame.control_stack.size());
+            brk(frame().control_stack.size());
             return;
         case call: {
-            invoke(read_leb128(iter), iter);
+            FunctionInfo &fn = functions[read_leb128(iter)];
+            prepare_to_call(fn, iter);
+            iter = fn.start;
             break;
         }
         case call_indirect:
@@ -439,13 +443,13 @@ void Instance::interpret(uint8_t *iter) {
             break;
         }
         case localget:
-            push(frame.locals[read_leb128(iter)]);
+            push(frame().locals[read_leb128(iter)]);
             break;
         case localset:
-            frame.locals[read_leb128(iter)] = pop();
+            frame().locals[read_leb128(iter)] = pop();
             break;
         case localtee:
-            frame.locals[read_leb128(iter)] = stack[-1];
+            frame().locals[read_leb128(iter)] = stack[-1];
             break;
         case globalget:
             push(globals[read_leb128(iter)].value);
