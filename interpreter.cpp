@@ -310,20 +310,19 @@ void Instance::interpret(uint8_t *iter) {
 
 #define LOAD(type)                                                             \
     {                                                                          \
-        uint32_t align = 1 << read_leb128(iter);                               \
+        uint32_t align = 1 << *iter++;                                         \
         uint32_t offset = read_leb128(iter);                                   \
-        uint32_t ptr = pop().u32;                                              \
-        push(memory.load<type>(ptr, offset, align));                           \
+        stack[-1] = memory.load<type>(stack[-1].u32, offset, align);           \
         break;                                                                 \
     }
 
 #define STORE(type, stacktype)                                                 \
     {                                                                          \
-        uint32_t align = 1 << read_leb128(iter);                               \
+        stack -= 2;                                                            \
+        uint32_t align = 1 << *iter++;                                         \
         uint32_t offset = read_leb128(iter);                                   \
-        uint32_t ptr = pop().u32;                                              \
-        memory.store<type>(ptr, offset, align,                                 \
-                           static_cast<type>(pop().stacktype));                \
+        memory.store<type>(stack[1].u32, offset, align,                        \
+                           static_cast<type>(stack[0].stacktype));             \
         break;                                                                 \
     }
 
@@ -474,16 +473,14 @@ void Instance::interpret(uint8_t *iter) {
             push((int64_t)read_leb128(iter));
             break;
         case f32const: {
-            float v;
-            std::memcpy(&v, iter, sizeof(float));
-            push(v);
+            std::memcpy(&stack->f32, iter, sizeof(float));
+            stack++;
             iter += sizeof(float);
             break;
         }
         case f64const:
-            double v;
-            std::memcpy(&v, iter, sizeof(double));
-            push(v);
+            std::memcpy(&stack->f64, iter, sizeof(double));
+            stack++;
             iter += sizeof(double);
             break;
         // clang-format off
