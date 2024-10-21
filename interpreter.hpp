@@ -111,6 +111,18 @@ struct IfJump {
     uint8_t *end;
 };
 
+enum class ExportDesc {
+    func,
+    table,
+    mem,
+    global,
+};
+
+struct Export {
+    ExportDesc desc;
+    uint32_t idx;
+};
+
 class Instance {
     friend class Validator;
 
@@ -135,6 +147,7 @@ class Instance {
     // maps element indices to the element in source bytes
     std::vector<uint8_t *> elements;
     std::vector<Signature> types;
+    std::unordered_map<std::string, Export> exports;
 
     Signature read_blocktype(uint8_t *&iter) {
         uint8_t byte = *iter;

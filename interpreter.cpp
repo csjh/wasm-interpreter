@@ -160,7 +160,21 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
     if (iter != end && *iter == 7) {
         ++iter;
         uint32_t section_length = safe_read_leb128<uint32_t>(iter);
-        iter += section_length;
+        uint32_t n_exports = safe_read_leb128<uint32_t>(iter);
+
+        for (uint32_t i = 0; i < n_exports; ++i) {
+            uint32_t name_len = safe_read_leb128<uint32_t>(iter);
+            std::string name(reinterpret_cast<char *>(iter), name_len);
+            iter += name_len;
+
+            uint8_t desc = *iter++;
+            assert(desc >= 0 && desc <= 3);
+            ExportDesc export_desc = static_cast<ExportDesc>(desc);
+
+            uint32_t idx = safe_read_leb128<uint32_t>(iter);
+
+            exports[name] = {export_desc, idx};
+        }
     }
 
     skip_custom_section();
