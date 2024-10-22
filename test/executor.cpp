@@ -25,9 +25,29 @@ std::vector<Mitey::WasmValue> to_wasm_values(const std::vector<value> &values) {
         } else if (v.type == "i64") {
             result.push_back(Mitey::WasmValue(std::stoull(v.value)));
         } else if (v.type == "f32") {
-            result.push_back(Mitey::WasmValue(std::stof(v.value)));
+            if (v.value == "nan:canonical") {
+                result.push_back(
+                    Mitey::WasmValue(std::numeric_limits<float>::quiet_NaN()));
+            } else if (v.value == "nan:arithmetic") {
+                result.push_back(Mitey::WasmValue(
+                    std::numeric_limits<float>::signaling_NaN()));
+            } else {
+                uint32_t bytes = std::stoul(v.value);
+                result.push_back(
+                    Mitey::WasmValue(*reinterpret_cast<float *>(&bytes)));
+            }
         } else if (v.type == "f64") {
-            result.push_back(Mitey::WasmValue(std::stod(v.value)));
+            if (v.value == "nan:canonical") {
+                result.push_back(
+                    Mitey::WasmValue(std::numeric_limits<double>::quiet_NaN()));
+            } else if (v.value == "nan:arithmetic") {
+                result.push_back(Mitey::WasmValue(
+                    std::numeric_limits<double>::signaling_NaN()));
+            } else {
+                uint64_t bytes = std::stoull(v.value);
+                result.push_back(
+                    Mitey::WasmValue(*reinterpret_cast<double *>(&bytes)));
+            }
         } else {
             std::cerr << "Unknown type: " << v.type << std::endl;
         }
@@ -77,6 +97,15 @@ struct test_return {
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(test_return, type, line, action, expected)
 
+struct test_action {
+    std::string type;
+    int line;
+    action action;
+    std::vector<value> expected;
+};
+
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(test_action, type, line, action, expected)
+
 struct test_invalid {
     std::string type;
     int line;
@@ -110,8 +139,9 @@ struct test_exhaustion {
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(test_exhaustion, type, line, action, text,
                                    expected)
 
-using Tests = std::variant<test_module, test_malformed, test_return,
-                           test_invalid, test_trap, test_exhaustion>;
+using Tests =
+    std::variant<test_module, test_malformed, test_return, test_action,
+                 test_invalid, test_trap, test_exhaustion>;
 
 namespace nlohmann {
 template <> struct adl_serializer<Tests> {
@@ -132,6 +162,8 @@ template <> struct adl_serializer<Tests> {
             opt = j.get<test_trap>();
         } else if (j["type"] == "assert_exhaustion") {
             opt = j.get<test_exhaustion>();
+        } else if (j["type"] == "action") {
+            opt = j.get<test_action>();
         } else {
             std::cerr << "Unknown type: " << j["type"] << std::endl;
         }
@@ -146,7 +178,7 @@ struct wastjson {
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(wastjson, source_filename, commands)
 
-Mitey::Instance from_file(const std::string &filename) {
+Mitey::Instance *from_file(const std::string &filename) {
     std::ifstream wasm_file{filename, std::ios::binary};
     if (!wasm_file) {
         throw std::system_error(errno, std::system_category(), filename);
@@ -163,7 +195,7 @@ Mitey::Instance from_file(const std::string &filename) {
     wasm_file.read(reinterpret_cast<char *>(bytes.get()), length);
     wasm_file.close();
 
-    return Mitey::Instance(std::move(bytes), length);
+    return new Mitey::Instance(std::move(bytes), length);
 }
 
 namespace fs = std::filesystem;
@@ -188,22 +220,16 @@ int main(int argv, char **argc) {
     auto wast = j.template get<wastjson>();
 
     std::cout << "Testing file: " << wast.source_filename << std::endl;
-    if (!std::holds_alternative<test_module>(wast.commands[0])) {
-        std::cerr << "First command is not a module" << std::endl;
-        return 1;
-    }
-    test_module &m = std::get<test_module>(wast.commands[0]);
-    Mitey::Instance instance =
-        from_file(resolve_relative(filename, m.filename));
-    wast.commands.erase(wast.commands.begin());
 
+    Mitey::Instance *instance = nullptr;
     for (auto &t : wast.commands) {
         nlohmann::json j = t;
         std::cerr << "Running test: " << j << std::endl;
 
         if (std::holds_alternative<test_module>(t)) {
-            std::cerr << "Duplicate module found" << std::endl;
-            return 1;
+            auto &m = std::get<test_module>(t);
+            delete instance;
+            instance = from_file(resolve_relative(filename, m.filename));
         } else if (std::holds_alternative<test_malformed>(t)) {
             // auto &m = std::get<test_malformed>(t);
             // malformation is only for wat
@@ -211,8 +237,8 @@ int main(int argv, char **argc) {
         } else if (std::holds_alternative<test_return>(t)) {
             auto &m = std::get<test_return>(t);
 
-            auto result =
-                instance.execute(m.action.field, to_wasm_values(m.action.args));
+            auto result = instance->execute(m.action.field,
+                                            to_wasm_values(m.action.args));
 
             if (result.size() != m.expected.size()) {
                 std::cerr << "Expected " << m.expected.size()
@@ -231,13 +257,21 @@ int main(int argv, char **argc) {
                     std::cerr << "Expected: " << exp.i64
                               << " but got: " << res.i64 << std::endl;
                     return false;
-                } else if (ty == "f32" && res.f32 != exp.f32) {
+                } else if (ty == "f32" && (res.f32 != exp.f32) &&
+                           (std::isnan(res.f32) != std::isnan(exp.f32))) {
                     std::cerr << "Expected: " << exp.f32
-                              << " but got: " << res.f32 << std::endl;
+                              << "(isnan: " << std::isnan(exp.f32) << ")"
+                              << " but got: " << res.f32
+                              << "(isnan: " << std::isnan(res.f32) << ")"
+                              << std::endl;
                     return false;
-                } else if (ty == "f64" && res.f64 != exp.f64) {
+                } else if (ty == "f64" && (res.f64 != exp.f64) &&
+                           (std::isnan(res.f64) != std::isnan(exp.f64))) {
                     std::cerr << "Expected: " << exp.f64
-                              << " but got: " << res.f64 << std::endl;
+                              << "(isnan: " << std::isnan(exp.f64) << ")"
+                              << " but got: " << res.f64
+                              << "(isnan: " << std::isnan(res.f64) << ")"
+                              << std::endl;
                     return false;
                 }
                 return true;
@@ -251,8 +285,7 @@ int main(int argv, char **argc) {
         } else if (std::holds_alternative<test_invalid>(t)) {
             auto &m = std::get<test_invalid>(t);
             try {
-                Mitey::Instance invalid_instance =
-                    from_file(resolve_relative(filename, m.filename));
+                delete from_file(resolve_relative(filename, m.filename));
 
                 std::cerr << "Expected validation error for file: "
                           << m.filename << std::endl;
@@ -261,20 +294,28 @@ int main(int argv, char **argc) {
         } else if (std::holds_alternative<test_trap>(t)) {
             auto &m = std::get<test_trap>(t);
             try {
-                auto result = instance.execute(m.action.field,
-                                               to_wasm_values(m.action.args));
+                auto result = instance->execute(m.action.field,
+                                                to_wasm_values(m.action.args));
 
                 std::cerr << "Expected trap for action: " << m.action.field
                           << std::endl;
             } catch (Mitey::trap_error &e) {
                 if (e.what() != m.text) {
-                    std::cerr << "Expected: " << m.text
+                    std::cerr << "Expected trap: " << m.text
                               << " but got: " << e.what() << std::endl;
                 }
             }
         } else if (std::holds_alternative<test_exhaustion>(t)) {
             // auto &m = std::get<test_exhaustion>(t);
             // todo: see if there's some memory trick to trap efficiently
+        } else if (std::holds_alternative<test_action>(t)) {
+            auto &m = std::get<test_action>(t);
+            assert(m.expected.size() == 0);
+
+            auto result = instance->execute(m.action.field,
+                                            to_wasm_values(m.action.args));
         }
     }
+
+    delete instance;
 }
