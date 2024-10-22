@@ -237,6 +237,32 @@ class Instance {
     std::invoke_result_t<FuncPointer, Args...> execute(Args... args) {
         return execute<FuncPointer>(fn_name.value, args...);
     }
+
+    // mainly intended for tests
+    std::vector<WasmValue> execute(const std::string &name,
+                                   const std::vector<WasmValue> &args) {
+        auto exp = exports.find(name);
+        if (exp == exports.end()) {
+            throw std::out_of_range("Function not found");
+        } else if (exp->second.desc != ExportDesc::func) {
+            throw std::invalid_argument("Export is not a function");
+        }
+
+        auto fn = functions[exp->second.idx];
+        if (fn.type.params.size() != args.size()) {
+            throw std::invalid_argument("Incorrect number of arguments");
+        }
+
+        for (auto &arg : args) {
+            push_arg(arg);
+        }
+
+        prepare_to_call(fn, nullptr);
+        interpret(fn.start);
+
+        stack = stack_start;
+        return std::vector<WasmValue>{stack, stack + fn.type.results.size()};
+    }
 };
 
 template <typename T> inline constexpr bool always_false = false;
@@ -275,7 +301,10 @@ template <typename ReturnType> ReturnType Instance::pop_result() {
 
 // Helper function to push an argument onto the stack
 template <typename T> void Instance::push_arg(T arg) {
-    if constexpr (std::is_same_v<T, int32_t> || std::is_same_v<T, uint32_t>) {
+    if constexpr (std::is_same_v<T, WasmValue>) {
+        *stack++ = arg;
+    } else if constexpr (std::is_same_v<T, int32_t> ||
+                         std::is_same_v<T, uint32_t>) {
         *stack++ = static_cast<int32_t>(arg);
     } else if constexpr (std::is_same_v<T, int64_t> ||
                          std::is_same_v<T, uint64_t>) {
