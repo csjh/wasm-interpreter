@@ -49,8 +49,8 @@ class WasmMemory {
     WasmMemory() : memory(nullptr), current(0), maximum(0) {}
 
     WasmMemory(uint32_t initial, uint32_t maximum)
-        : memory(
-              static_cast<uint8_t *>(calloc(initial * PAGE_SIZE, sizeof(uint8_t)))),
+        : memory(static_cast<uint8_t *>(
+              calloc(initial * PAGE_SIZE, sizeof(uint8_t)))),
           current(initial), maximum(maximum) {}
 
     WasmMemory(const WasmMemory &) = delete;
@@ -70,7 +70,8 @@ class WasmMemory {
         uint32_t new_current = current + delta;
         assert(new_current <= maximum);
 
-        uint8_t *new_memory = (uint8_t *)realloc(memory, new_current * PAGE_SIZE);
+        uint8_t *new_memory =
+            (uint8_t *)realloc(memory, new_current * PAGE_SIZE);
         if (new_memory == NULL)
             return -1;
         memory = new_memory;
@@ -97,6 +98,11 @@ class WasmMemory {
         if (reinterpret_cast<uint64_t>(effective) % align != 0)
             __builtin_unreachable();
         std::memcpy(effective, &value, sizeof(T));
+    }
+
+    void copy_into(uint32_t ptr, const uint8_t *data, uint32_t length) {
+        assert(ptr + length <= current * PAGE_SIZE);
+        std::memcpy(memory + ptr, data, length);
     }
 };
 

@@ -272,6 +272,8 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
                 std::memcpy(data.data(), iter, data_length);
                 iter += data_length;
 
+                memory.copy_into(offset, data.data(), data_length);
+
                 data_segments.emplace_back(Segment{memidx, std::move(data)});
             }
         }
