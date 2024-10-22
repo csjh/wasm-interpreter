@@ -51,6 +51,11 @@ class WasmMemory {
               static_cast<uint8_t *>(calloc(initial * 65536, sizeof(uint8_t)))),
           current(initial), maximum(maximum) {}
 
+    WasmMemory(const WasmMemory &) = delete;
+    WasmMemory &operator=(const WasmMemory &) = delete;
+    WasmMemory(WasmMemory &&) = delete;
+    WasmMemory &operator=(WasmMemory &&) = delete;
+
     ~WasmMemory() {
         if (memory) {
             free(memory);
@@ -147,6 +152,11 @@ template <size_t N> string_literal(const char (&)[N]) -> string_literal<N>;
 
 class Instance {
     friend class Validator;
+
+    Instance(const Instance &) = delete;
+    Instance &operator=(const Instance &) = delete;
+    Instance(Instance &&) = delete;
+    Instance &operator=(Instance &&) = delete;
 
     // source bytes
     std::unique_ptr<uint8_t, void (*)(uint8_t *)> bytes;
