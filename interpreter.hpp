@@ -24,6 +24,13 @@ union WasmValue {
     WasmValue(uint64_t u64) : u64(u64) {}
     WasmValue(float f32) : f32(f32) {}
     WasmValue(double f64) : f64(f64) {}
+
+    operator int32_t() { return i32; }
+    operator uint32_t() { return u32; }
+    operator int64_t() { return i64; }
+    operator uint64_t() { return u64; }
+    operator float() { return f32; }
+    operator double() { return f64; }
 };
 
 class WasmMemory {
@@ -148,6 +155,8 @@ class Instance {
     std::vector<uint8_t *> elements;
     std::vector<Signature> types;
     std::unordered_map<std::string, Export> exports;
+    // stack start for debugging and emptyness assertions
+    WasmValue *stack_start;
 
     Signature read_blocktype(uint8_t *&iter) {
         uint8_t byte = *iter;
@@ -173,6 +182,9 @@ class Instance {
 
     StackFrame &frame() { return frames.back(); }
 
+    template <typename Tuple, size_t... I>
+    Tuple create_tuple(std::index_sequence<I...>);
+
   public:
     Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> bytes,
              uint32_t length);
@@ -186,24 +198,35 @@ class Instance {
 
 template <typename T> inline constexpr bool always_false = false;
 
+template <template <typename...> class T, typename U>
+constexpr bool is_specialization_of = false;
+
+template <template <typename...> class T, typename... Us>
+constexpr bool is_specialization_of<T, T<Us...>> = true;
+
+template <typename Tuple, size_t... I>
+Tuple Instance::create_tuple(std::index_sequence<I...>) {
+    return std::make_tuple(
+        static_cast<std::tuple_element_t<I, Tuple>>(stack[I])...);
+}
+
 // Helper function to pop and return the result
 template <typename ReturnType> ReturnType Instance::pop_result() {
-    WasmValue result = *--stack;
+    if constexpr (is_specialization_of<std::tuple, ReturnType>) {
+        constexpr size_t size = std::tuple_size_v<ReturnType>;
 
-    if constexpr (std::is_same_v<ReturnType, int32_t>) {
-        return result.i32;
-    } else if constexpr (std::is_same_v<ReturnType, uint32_t>) {
-        return result.u32;
-    } else if constexpr (std::is_same_v<ReturnType, int64_t>) {
-        return result.i64;
-    } else if constexpr (std::is_same_v<ReturnType, uint64_t>) {
-        return result.u64;
-    } else if constexpr (std::is_same_v<ReturnType, float>) {
-        return result.f32;
-    } else if constexpr (std::is_same_v<ReturnType, double>) {
-        return result.f64;
+        if (stack - stack_start != size) [[unlikely]] {
+            throw std::out_of_range("Incorrect number of results");
+        }
+
+        stack = stack_start;
+        return create_tuple<ReturnType>(std::make_index_sequence<size>{});
     } else {
-        static_assert(always_false<ReturnType>, "Unsupported return type");
+        if (stack - stack_start != 1) [[unlikely]] {
+            throw std::out_of_range("Incorrect number of results");
+        }
+
+        return static_cast<ReturnType>(*--stack);
     }
 }
 
@@ -245,10 +268,6 @@ std::invoke_result_t<FuncPointer, Args...> Instance::execute(uint32_t idx,
 
     if (sizeof...(Args) != fn.type.params.size()) {
         throw std::invalid_argument("Incorrect number of arguments");
-    }
-
-    if (fn.type.results.size() != 1) {
-        throw std::invalid_argument("Incorrect number of results");
     }
 
     // push arguments onto the stack, casting to FnArgs

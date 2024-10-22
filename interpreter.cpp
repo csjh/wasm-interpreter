@@ -3,18 +3,10 @@
 #include <limits>
 
 namespace Mitey {
-#ifdef WASM_DEBUG
-WasmValue *stack_start;
-#endif
-
 Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
                    uint32_t length)
     : bytes(std::move(_bytes)),
-      stack(static_cast<WasmValue *>(malloc(stack_size))) {
-
-#ifdef WASM_DEBUG
-    stack_start = stack;
-#endif
+      stack(static_cast<WasmValue *>(malloc(stack_size))), stack_start(stack) {
 
     // todo: use byte iterator or something
     uint8_t *iter = bytes.get();
@@ -660,7 +652,10 @@ void Instance::interpret(uint8_t *iter) {
 
 // todo: this should check stack is the base pointer
 // won't be necessary after validation is added
-Instance::~Instance() { free(stack); }
+Instance::~Instance() {
+    assert(stack == stack_start);
+    free(stack_start);
+}
 } // namespace Mitey
 
 /*
