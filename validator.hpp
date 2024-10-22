@@ -9,6 +9,7 @@ class validation_error : public std::runtime_error {
 
 class Validator {
     Instance &instance;
+    uint32_t n_data;
     FunctionInfo current_fn;
     std::vector<std::vector<valtype>> control_stack;
 
@@ -16,7 +17,8 @@ class Validator {
                   bool is_func = false);
 
   public:
-    Validator(Instance &instance) : instance(instance) {}
+    Validator(Instance &instance, uint32_t n_data)
+        : instance(instance), n_data(n_data) {}
 
     void validate();
 };

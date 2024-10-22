@@ -142,13 +142,8 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
             assert(is_mut(maybe_mut));
             mut global_mut = static_cast<mut>(maybe_mut);
 
-            // todo: change this when interpret actually has meaning
-            WasmValue value{0};
-            while (*iter++ != 0x0b) {
-                // interpret(iter);
-            }
-
-            globals.emplace_back(WasmGlobal{type, global_mut, value});
+            globals.emplace_back(
+                WasmGlobal{type, global_mut, interpret_const(iter)});
         }
     }
 
@@ -196,7 +191,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
 
     skip_custom_section();
 
-    // todo: data count section
+    // data count section
     if (iter != end && *iter == 12) {
         ++iter;
         uint32_t section_length = safe_read_leb128<uint32_t>(iter);
@@ -239,13 +234,52 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
     // todo: data section
     if (iter != end && *iter == 11) {
         ++iter;
-        uint32_t section_length = safe_read_leb128<uint32_t>(iter);
-        iter += section_length;
+        /* uint32_t section_length = */ safe_read_leb128<uint32_t>(iter);
+        uint32_t n_data = safe_read_leb128<uint32_t>(iter);
+
+        for (uint32_t i = 0; i < n_data; i++) {
+            uint32_t segment_flag = *iter++;
+            if (segment_flag & ~0b11) {
+                throw malformed_error("invalid data segment flag");
+            }
+
+            uint32_t memidx =
+                segment_flag & 0b10 ? safe_read_leb128<uint32_t>(iter) : 0;
+
+            if (memidx != 0) {
+                throw malformed_error("non-zero memory index");
+            }
+
+            if (segment_flag & 1) {
+                // passive segment
+
+                uint32_t data_length = safe_read_leb128<uint32_t>(iter);
+                std::vector<uint8_t> data(data_length);
+                std::memcpy(data.data(), iter, data_length);
+                iter += data_length;
+
+                data_segments.emplace_back(Segment{memidx, std::move(data)});
+            } else {
+                // active segment
+
+                uint32_t offset = interpret_const(iter).u32;
+                if (offset >= memory.size() * WasmMemory::PAGE_SIZE) {
+                    throw malformed_error("invalid memory offset");
+                }
+
+                uint32_t data_length = safe_read_leb128<uint32_t>(iter);
+                std::vector<uint8_t> data(data_length);
+                std::memcpy(data.data(), iter, data_length);
+                iter += data_length;
+
+                data_segments.emplace_back(Segment{memidx, std::move(data)});
+            }
+        }
     }
 
     skip_custom_section();
 
-    Validator(*this).validate();
+    Validator(*this, data_segments.size()).validate();
 
     if (start != std::numeric_limits<uint32_t>::max()) {
         execute<void (*)()>(start);
@@ -264,6 +298,74 @@ void Instance::prepare_to_call(const FunctionInfo &fn, uint8_t *return_to) {
         StackFrame{locals_start,
                    {{locals_start, return_to,
                      static_cast<uint32_t>(fn.type.results.size())}}});
+}
+
+// constant expressions (including extended const expression proposal)
+WasmValue Instance::interpret_const(uint8_t *&iter) {
+#define OP(ty, op)                                                             \
+    {                                                                          \
+        stack[-1].ty = stack[-1].ty op stack[0].ty;                            \
+        stack--;                                                               \
+        break;                                                                 \
+    }
+#define I32_OP(op) OP(i32, op)
+#define I64_OP(op) OP(i64, op)
+
+    while (1) {
+        uint8_t byte = *iter++;
+        using enum Instruction;
+        if (static_cast<Instruction>(byte) == end) {
+            break;
+        }
+        switch (static_cast<Instruction>(byte)) {
+        case i32const:
+            *stack++ = safe_read_leb128<int32_t>(iter);
+            break;
+        case i64const:
+            *stack++ = safe_read_leb128<int64_t>(iter);
+            break;
+        case f32const:
+            *stack++ = *reinterpret_cast<float *>(iter);
+            iter += sizeof(float);
+            break;
+        case f64const:
+            *stack++ = *reinterpret_cast<double *>(iter);
+            iter += sizeof(double);
+            break;
+        case globalget: {
+            uint32_t global_idx = safe_read_leb128<uint32_t>(iter);
+            if (global_idx >= globals.size()) {
+                throw malformed_error("invalid global index");
+            }
+            *stack++ = globals[global_idx].value;
+            break;
+        }
+        case i32add:
+            I32_OP(+);
+        case i32sub:
+            I32_OP(-);
+        case i32mul:
+            I32_OP(*);
+        case i64add:
+            I64_OP(+);
+        case i64sub:
+            I64_OP(-);
+        case i64mul:
+            I64_OP(*);
+        default:
+            throw malformed_error("invalid instruction in const expression");
+        }
+    }
+
+#undef OP
+#undef I32_OP
+#undef I64_OP
+
+    if (stack - stack_start != 1) {
+        throw malformed_error("Incorrect number of results");
+    }
+
+    return *--stack;
 }
 
 [[noreturn]] void trap(std::string message) {

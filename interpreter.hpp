@@ -44,11 +44,13 @@ class WasmMemory {
     uint32_t maximum;
 
   public:
+    static const uint32_t PAGE_SIZE = 65536;
+
     WasmMemory() : memory(nullptr), current(0), maximum(0) {}
 
     WasmMemory(uint32_t initial, uint32_t maximum)
         : memory(
-              static_cast<uint8_t *>(calloc(initial * 65536, sizeof(uint8_t)))),
+              static_cast<uint8_t *>(calloc(initial * PAGE_SIZE, sizeof(uint8_t)))),
           current(initial), maximum(maximum) {}
 
     WasmMemory(const WasmMemory &) = delete;
@@ -68,11 +70,11 @@ class WasmMemory {
         uint32_t new_current = current + delta;
         assert(new_current <= maximum);
 
-        uint8_t *new_memory = (uint8_t *)realloc(memory, new_current * 65536);
+        uint8_t *new_memory = (uint8_t *)realloc(memory, new_current * PAGE_SIZE);
         if (new_memory == NULL)
             return -1;
         memory = new_memory;
-        std::memset(memory + current * 65536, 0, delta * 65536);
+        std::memset(memory + current * PAGE_SIZE, 0, delta * PAGE_SIZE);
 
         uint32_t old_current = current;
         current = new_current;
@@ -140,6 +142,11 @@ struct Export {
     uint32_t idx;
 };
 
+struct Segment {
+    uint32_t memidx;
+    std::vector<uint8_t> data;
+};
+
 template <size_t N> struct string_literal {
     constexpr string_literal(const char (&str)[N]) {
         std::copy_n(str, N, value);
@@ -178,10 +185,14 @@ class Instance {
     std::vector<uint8_t *> tables;
     // maps element indices to the element in source bytes
     std::vector<uint8_t *> elements;
+    // types from type section
     std::vector<Signature> types;
+    // exports from export section
     std::unordered_map<std::string, Export> exports;
     // stack start for debugging and emptyness assertions
     WasmValue *stack_start;
+    // data segments
+    std::vector<Segment> data_segments;
 
     Signature read_blocktype(uint8_t *&iter) {
         uint8_t byte = *iter;
@@ -201,6 +212,8 @@ class Instance {
 
     void prepare_to_call(const FunctionInfo &idx, uint8_t *return_to);
     void interpret(uint8_t *iter);
+
+    WasmValue interpret_const(uint8_t *&iter);
 
     template <typename T> void push_arg(T arg);
     template <typename ReturnType> ReturnType pop_result();
