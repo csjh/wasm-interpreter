@@ -219,8 +219,6 @@ int main(int argv, char **argc) {
 
     auto wast = j.template get<wastjson>();
 
-    std::cout << "Testing file: " << wast.source_filename << std::endl;
-
     Mitey::Instance *instance = nullptr;
     for (auto &t : wast.commands) {
         nlohmann::json j = t;
