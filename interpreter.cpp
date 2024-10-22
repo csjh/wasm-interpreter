@@ -473,10 +473,10 @@ void Instance::interpret(uint8_t *iter) {
             break;
         }
         case i32const:
-            push((int32_t)read_leb128(iter));
+            push((int32_t)read_sleb128<32>(iter));
             break;
         case i64const:
-            push((int64_t)read_leb128(iter));
+            push((int64_t)read_sleb128<64>(iter));
             break;
         case f32const: {
             std::memcpy(&stack->f32, iter, sizeof(float));

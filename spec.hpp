@@ -44,7 +44,7 @@ static inline bool is_mut(uint8_t byte) {
            byte == static_cast<uint8_t>(mut::var);
 }
 
-static inline int64_t read_sleb128(uint8_t *&iter) {
+template <uint8_t BITS> static inline int64_t read_sleb128(uint8_t *&iter) {
     int64_t result = 0;
     uint64_t shift = 0;
     uint64_t byte;
@@ -53,18 +53,21 @@ static inline int64_t read_sleb128(uint8_t *&iter) {
         result |= (byte & 0x7f) << shift;
         shift += 7;
     } while (byte & 0x80);
-    if (shift < 64 && (byte & 0x40)) {
+    if (shift < BITS && (byte & 0x40)) {
         result |= -1 << shift;
     }
+    // sign extend
+    result <<= 64 - BITS;
+    result >>= 64 - BITS;
     return result;
 }
 
-template <typename T, uint8_t bits = sizeof(T) * 8>
+template <typename T, uint8_t BITS = sizeof(T) * 8>
 static inline T safe_read_sleb128(uint8_t *&iter) {
-    assert(bits / 8 <= sizeof(T));
-    int64_t result = read_sleb128(iter);
-    assert(result <= static_cast<int64_t>((1ULL << (bits - 1)) - 1));
-    assert(result >= static_cast<int64_t>(-(1ULL << (bits - 1))));
+    assert(BITS / 8 <= sizeof(T));
+    int64_t result = read_sleb128<BITS>(iter);
+    assert(result <= static_cast<int64_t>((1ULL << (BITS - 1)) - 1));
+    assert(result >= static_cast<int64_t>(-(1ULL << (BITS - 1))));
     return static_cast<T>(result);
 }
 
