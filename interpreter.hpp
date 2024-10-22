@@ -9,6 +9,11 @@
 #include <vector>
 
 namespace Mitey {
+class malformed_error : public std::runtime_error {
+  public:
+    malformed_error(const std::string &message) : std::runtime_error(message) {}
+};
+
 // technically unsigned versions don't exist but easier to use if they're here
 union WasmValue {
     int32_t i32;
