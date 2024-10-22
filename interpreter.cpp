@@ -151,7 +151,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
     // todo: export section
     if (iter != end && *iter == 7) {
         ++iter;
-        uint32_t section_length = safe_read_leb128<uint32_t>(iter);
+        /* uint32_t section_length = */ safe_read_leb128<uint32_t>(iter);
         uint32_t n_exports = safe_read_leb128<uint32_t>(iter);
 
         for (uint32_t i = 0; i < n_exports; ++i) {
