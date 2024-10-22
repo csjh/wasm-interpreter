@@ -4,7 +4,7 @@
 #include <cstdint>
 #include <vector>
 
-namespace Mitey {
+namespace mitey {
 enum class valtype : uint8_t {
     empty = 0x40,
 
@@ -394,4 +394,4 @@ static inline bool is_instruction(uint8_t) {
     // todo: figure out best way for this
     return true;
 }
-} // namespace Mitey
+} // namespace mitey

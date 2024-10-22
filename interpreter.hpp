@@ -8,10 +8,15 @@
 #include <unordered_map>
 #include <vector>
 
-namespace Mitey {
+namespace mitey {
 class malformed_error : public std::runtime_error {
   public:
     malformed_error(const std::string &message) : std::runtime_error(message) {}
+};
+
+class trap_error : public std::runtime_error {
+  public:
+    trap_error(const std::string &message) : std::runtime_error(message) {}
 };
 
 // technically unsigned versions don't exist but easier to use if they're here
@@ -373,4 +378,4 @@ std::invoke_result_t<FuncPointer, Args...> Instance::execute(uint32_t idx,
 }
 
 constexpr uint32_t stack_size = 5 * 1024 * 1024; // 5mb
-} // namespace Mitey
+} // namespace mitey

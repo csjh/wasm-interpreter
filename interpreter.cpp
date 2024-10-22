@@ -6,7 +6,7 @@
 #include <iostream>
 #endif
 
-namespace Mitey {
+namespace mitey {
 Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
                    uint32_t length)
     : bytes(std::move(_bytes)),
@@ -758,7 +758,7 @@ void Instance::interpret(uint8_t *iter) {
 #undef BINARY_FN
 #undef LOAD
 #undef STORE
-} // namespace Mitey
+}
 
 // todo: this should check stack is the base pointer
 // won't be necessary after validation is added
@@ -766,7 +766,7 @@ Instance::~Instance() {
     assert(stack == stack_start);
     free(stack_start);
 }
-} // namespace Mitey
+} // namespace mitey
 
 /*
 sections:

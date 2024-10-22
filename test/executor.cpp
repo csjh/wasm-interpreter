@@ -16,37 +16,37 @@ struct value {
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(value, type, value)
 
-std::vector<Mitey::WasmValue> to_wasm_values(const std::vector<value> &values) {
-    std::vector<Mitey::WasmValue> result;
+std::vector<mitey::WasmValue> to_wasm_values(const std::vector<value> &values) {
+    std::vector<mitey::WasmValue> result;
     for (auto &v : values) {
         if (v.type == "i32") {
             result.push_back(
-                Mitey::WasmValue(static_cast<uint32_t>(std::stoul(v.value))));
+                mitey::WasmValue(static_cast<uint32_t>(std::stoul(v.value))));
         } else if (v.type == "i64") {
-            result.push_back(Mitey::WasmValue(std::stoull(v.value)));
+            result.push_back(mitey::WasmValue(std::stoull(v.value)));
         } else if (v.type == "f32") {
             if (v.value == "nan:canonical") {
                 result.push_back(
-                    Mitey::WasmValue(std::numeric_limits<float>::quiet_NaN()));
+                    mitey::WasmValue(std::numeric_limits<float>::quiet_NaN()));
             } else if (v.value == "nan:arithmetic") {
-                result.push_back(Mitey::WasmValue(
+                result.push_back(mitey::WasmValue(
                     std::numeric_limits<float>::signaling_NaN()));
             } else {
                 uint32_t bytes = std::stoul(v.value);
                 result.push_back(
-                    Mitey::WasmValue(*reinterpret_cast<float *>(&bytes)));
+                    mitey::WasmValue(*reinterpret_cast<float *>(&bytes)));
             }
         } else if (v.type == "f64") {
             if (v.value == "nan:canonical") {
                 result.push_back(
-                    Mitey::WasmValue(std::numeric_limits<double>::quiet_NaN()));
+                    mitey::WasmValue(std::numeric_limits<double>::quiet_NaN()));
             } else if (v.value == "nan:arithmetic") {
-                result.push_back(Mitey::WasmValue(
+                result.push_back(mitey::WasmValue(
                     std::numeric_limits<double>::signaling_NaN()));
             } else {
                 uint64_t bytes = std::stoull(v.value);
                 result.push_back(
-                    Mitey::WasmValue(*reinterpret_cast<double *>(&bytes)));
+                    mitey::WasmValue(*reinterpret_cast<double *>(&bytes)));
             }
         } else {
             std::cerr << "Unknown type: " << v.type << std::endl;
@@ -178,7 +178,7 @@ struct wastjson {
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(wastjson, source_filename, commands)
 
-Mitey::Instance *from_file(const std::string &filename) {
+mitey::Instance *from_file(const std::string &filename) {
     std::ifstream wasm_file{filename, std::ios::binary};
     if (!wasm_file) {
         throw std::system_error(errno, std::system_category(), filename);
@@ -195,7 +195,7 @@ Mitey::Instance *from_file(const std::string &filename) {
     wasm_file.read(reinterpret_cast<char *>(bytes.get()), length);
     wasm_file.close();
 
-    return new Mitey::Instance(std::move(bytes), length);
+    return new mitey::Instance(std::move(bytes), length);
 }
 
 namespace fs = std::filesystem;
@@ -219,7 +219,7 @@ int main(int argv, char **argc) {
 
     auto wast = j.template get<wastjson>();
 
-    Mitey::Instance *instance = nullptr;
+    mitey::Instance *instance = nullptr;
     for (auto &t : wast.commands) {
         nlohmann::json j = t;
         std::cerr << "Running test: " << j << std::endl;
@@ -246,8 +246,8 @@ int main(int argv, char **argc) {
 
             auto expected_results = to_wasm_values(m.expected);
 
-            auto test = [](std::string &ty, Mitey::WasmValue &res,
-                           Mitey::WasmValue &exp) {
+            auto test = [](std::string &ty, mitey::WasmValue &res,
+                           mitey::WasmValue &exp) {
                 if (ty == "i32" && res.i32 != exp.i32) {
                     std::cerr << "Expected: " << exp.i32
                               << " but got: " << res.i32 << std::endl;
@@ -289,7 +289,7 @@ int main(int argv, char **argc) {
                 std::cerr << "Expected validation error for file: "
                           << m.filename << std::endl;
                 return 1;
-            } catch (Mitey::malformed_error &e) {
+            } catch (mitey::malformed_error &e) {
             }
         } else if (std::holds_alternative<test_trap>(t)) {
             auto &m = std::get<test_trap>(t);
@@ -300,7 +300,7 @@ int main(int argv, char **argc) {
                 std::cerr << "Expected trap for action: " << m.action.field
                           << std::endl;
                 return 1;
-            } catch (Mitey::trap_error &e) {
+            } catch (mitey::trap_error &e) {
                 if (e.what() != m.text) {
                     std::cerr << "Expected trap: " << m.text
                               << " but got: " << e.what() << std::endl;

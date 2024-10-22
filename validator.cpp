@@ -1,6 +1,6 @@
 #include "validator.hpp"
 
-namespace Mitey {
+namespace mitey {
 
 static inline void _ensure(bool condition, const std::string &expr, int line,
                            const std::string &file, const std::string &msg) {
@@ -464,4 +464,4 @@ void Validator::validate(uint8_t *&iter, const Signature &signature,
 
 #undef ensure
 
-} // namespace Mitey
+} // namespace mitey

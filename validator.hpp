@@ -1,6 +1,6 @@
 #include "interpreter.hpp"
 
-namespace Mitey {
+namespace mitey {
 
 class validation_error : public std::runtime_error {
   public:
@@ -23,4 +23,4 @@ class Validator {
     void validate();
 };
 
-} // namespace Mitey
+} // namespace mitey
