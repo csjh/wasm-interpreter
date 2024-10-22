@@ -107,7 +107,9 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
         /* uint32_t section_length = */ safe_read_leb128<uint32_t>(iter);
 
         uint32_t n_memories = safe_read_leb128<uint32_t>(iter);
-        assert(n_memories == 1);
+        if (n_memories > 1) {
+            throw malformed_error("multiple memories");
+        }
 
         // Limits are encoded with a preceding flag indicating whether a maximum
         // is present.

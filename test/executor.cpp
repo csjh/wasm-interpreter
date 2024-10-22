@@ -241,6 +241,7 @@ int main(int argv, char **argc) {
             if (result.size() != m.expected.size()) {
                 std::cerr << "Expected " << m.expected.size()
                           << " results but got " << result.size() << std::endl;
+                return 1;
             }
 
             auto expected_results = to_wasm_values(m.expected);
@@ -287,7 +288,8 @@ int main(int argv, char **argc) {
 
                 std::cerr << "Expected validation error for file: "
                           << m.filename << std::endl;
-            } catch (Mitey::validation_error &e) {
+                return 1;
+            } catch (Mitey::malformed_error &e) {
             }
         } else if (std::holds_alternative<test_trap>(t)) {
             auto &m = std::get<test_trap>(t);
@@ -297,10 +299,12 @@ int main(int argv, char **argc) {
 
                 std::cerr << "Expected trap for action: " << m.action.field
                           << std::endl;
+                return 1;
             } catch (Mitey::trap_error &e) {
                 if (e.what() != m.text) {
                     std::cerr << "Expected trap: " << m.text
                               << " but got: " << e.what() << std::endl;
+                    return 1;
                 }
             }
         } else if (std::holds_alternative<test_exhaustion>(t)) {
@@ -316,4 +320,6 @@ int main(int argv, char **argc) {
     }
 
     delete instance;
+
+    return 0;
 }
