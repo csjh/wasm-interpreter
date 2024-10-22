@@ -152,7 +152,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
 
     skip_custom_section();
 
-    // todo: export section
+    // export section
     if (iter != end && *iter == 7) {
         ++iter;
         /* uint32_t section_length = */ safe_read_leb128<uint32_t>(iter);
@@ -341,7 +341,8 @@ void Instance::interpret(uint8_t *iter) {
     while (1) {
         uint8_t byte = *iter++;
 #ifdef WASM_DEBUG
-        std::cerr << "reading instruction " << instructions[byte].c_str() << " at " << iter - bytes.get() << std::endl;
+        std::cerr << "reading instruction " << instructions[byte].c_str()
+                  << " at " << iter - bytes.get() << std::endl;
         std::cerr << "stack contents: ";
         for (WasmValue *p = stack_start; p < stack; ++p) {
             std::cerr << p->u64 << " ";
