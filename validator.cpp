@@ -119,8 +119,6 @@ void Validator::validate(uint8_t *&iter, const Signature &signature,
     while (1) {
         uint8_t byte = *iter++;
         ensure(is_instruction(byte), "invalid instruction");
-        // printf("reading instruction %#04x %ld\n", byte,
-        //        iter - instance.bytes.get());
         switch (static_cast<Instruction>(byte)) {
         case unreachable:
             stack.polymorphize();
