@@ -196,6 +196,15 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
 
     skip_custom_section();
 
+    // todo: data count section
+    if (iter != end && *iter == 12) {
+        ++iter;
+        uint32_t section_length = safe_read_leb128<uint32_t>(iter);
+        iter += section_length;
+    }
+
+    skip_custom_section();
+
     // code section
     if (iter != end && *iter == 10) {
         ++iter;
@@ -229,15 +238,6 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
 
     // todo: data section
     if (iter != end && *iter == 11) {
-        ++iter;
-        uint32_t section_length = safe_read_leb128<uint32_t>(iter);
-        iter += section_length;
-    }
-
-    skip_custom_section();
-
-    // todo: data count section
-    if (iter != end && *iter == 12) {
         ++iter;
         uint32_t section_length = safe_read_leb128<uint32_t>(iter);
         iter += section_length;
