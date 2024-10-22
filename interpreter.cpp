@@ -429,7 +429,7 @@ void Instance::interpret(uint8_t *iter) {
             break;
         }
         case return_:
-            brk(frame().control_stack.size());
+            brk(frame().control_stack.size() - 1);
             return;
         case call: {
             FunctionInfo &fn = functions[read_leb128(iter)];
