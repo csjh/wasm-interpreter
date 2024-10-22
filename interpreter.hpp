@@ -135,6 +135,16 @@ struct Export {
     uint32_t idx;
 };
 
+template <size_t N> struct string_literal {
+    constexpr string_literal(const char (&str)[N]) {
+        std::copy_n(str, N, value);
+    }
+    char value[N];
+    static constexpr size_t size = N - 1;
+};
+
+template <size_t N> string_literal(const char (&)[N]) -> string_literal<N>;
+
 class Instance {
     friend class Validator;
 
@@ -190,6 +200,10 @@ class Instance {
     template <typename Tuple, size_t... I>
     Tuple create_tuple(std::index_sequence<I...>);
 
+    template <typename FuncPointer, typename... Args>
+    std::invoke_result_t<FuncPointer, Args...> execute(uint32_t idx,
+                                                       Args... args);
+
   public:
     Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> bytes,
              uint32_t length);
@@ -197,8 +211,22 @@ class Instance {
     ~Instance();
 
     template <typename FuncPointer, typename... Args>
-    std::invoke_result_t<FuncPointer, Args...> execute(uint32_t idx,
-                                                       Args... args);
+    std::invoke_result_t<FuncPointer, Args...> execute(const std::string &name,
+                                                       Args... args) {
+        auto exp = exports.find(name);
+        if (exp == exports.end()) {
+            throw std::out_of_range("Function not found");
+        } else if (exp->second.desc != ExportDesc::func) {
+            throw std::invalid_argument("Export is not a function");
+        }
+
+        return execute<FuncPointer>(exp->second.idx, args...);
+    }
+
+    template <string_literal fn_name, typename FuncPointer, typename... Args>
+    std::invoke_result_t<FuncPointer, Args...> execute(Args... args) {
+        return execute<FuncPointer>(fn_name.value, args...);
+    }
 };
 
 template <typename T> inline constexpr bool always_false = false;
