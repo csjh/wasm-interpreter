@@ -467,7 +467,7 @@ void Instance::interpret(uint8_t *iter) {
         case block: {
             Signature sn = read_blocktype(iter);
             frame().control_stack.push_back(
-                {stack - sn.results.size(), block_ends[iter],
+                {stack - sn.params.size(), block_ends[iter],
                  static_cast<uint32_t>(sn.results.size())});
             break;
         }
@@ -484,7 +484,7 @@ void Instance::interpret(uint8_t *iter) {
         case if_: {
             Signature sn = read_blocktype(iter);
             frame().control_stack.push_back(
-                {stack - sn.results.size(), if_jumps[iter].end,
+                {stack - sn.params.size(), if_jumps[iter].end,
                  static_cast<uint32_t>(sn.results.size())});
             if (!pop().i32)
                 iter = if_jumps[iter].else_;
