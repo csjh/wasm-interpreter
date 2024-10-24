@@ -7,6 +7,8 @@
 #endif
 
 namespace mitey {
+[[noreturn]] void trap(std::string message) { throw trap_error(message); }
+
 Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
                    uint32_t length)
     : bytes(std::move(_bytes)),
@@ -300,6 +302,11 @@ void Instance::prepare_to_call(const FunctionInfo &fn, uint8_t *return_to) {
         StackFrame{locals_start,
                    {{locals_start, return_to,
                      static_cast<uint32_t>(fn.type.results.size())}}});
+
+    constexpr size_t MAX_DEPTH = 1'000'000;
+    if (frames.size() > MAX_DEPTH) {
+        trap("call stack exhausted");
+    }
 }
 
 // constant expressions (including extended const expression proposal)
@@ -368,10 +375,6 @@ WasmValue Instance::interpret_const(uint8_t *&iter) {
     }
 
     return *--stack;
-}
-
-[[noreturn]] void trap(std::string message) {
-    throw std::runtime_error(message);
 }
 
 void Instance::interpret(uint8_t *iter) {
