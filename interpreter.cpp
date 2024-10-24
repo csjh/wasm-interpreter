@@ -557,7 +557,8 @@ void Instance::interpret(uint8_t *iter) {
             break;
         case select: {
             stack -= 2;
-            stack[-1] = stack[-1].i32 ? stack[1] : stack[0];
+            if (!stack[1].i32)
+                stack[-1] = stack[0];
             break;
         }
         case localget:
