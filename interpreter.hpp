@@ -19,6 +19,10 @@ class trap_error : public std::runtime_error {
     trap_error(const std::string &message) : std::runtime_error(message) {}
 };
 
+[[noreturn]] static inline void trap(std::string message) {
+    throw trap_error(message);
+}
+
 // technically unsigned versions don't exist but easier to use if they're here
 union WasmValue {
     int32_t i32;

@@ -7,7 +7,16 @@
 #endif
 
 namespace mitey {
-[[noreturn]] void trap(std::string message) { throw trap_error(message); }
+std::tuple<uint32_t, uint32_t> get_limits(uint8_t *&iter) {
+    uint32_t flags = safe_read_leb128<uint32_t>(iter);
+    if (flags != 0 && flags != 1) {
+        throw malformed_error("invalid flags");
+    }
+    uint32_t initial = safe_read_leb128<uint32_t>(iter);
+    uint32_t maximum = flags == 1 ? safe_read_leb128<uint32_t>(iter)
+                                  : std::numeric_limits<uint32_t>::max();
+    return {initial, maximum};
+}
 
 Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
                    uint32_t length)
@@ -113,15 +122,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
             throw malformed_error("multiple memories");
         }
 
-        // Limits are encoded with a preceding flag indicating whether a maximum
-        // is present.
-        uint32_t flags = safe_read_leb128<uint32_t>(iter);
-        assert(flags == 0 || flags == 1);
-
-        uint32_t initial = safe_read_leb128<uint32_t>(iter);
-        uint32_t maximum =
-            flags == 1 ? safe_read_leb128<uint32_t>(iter) : initial;
-
+        auto [initial, maximum] = get_limits(iter);
         new (&memory) WasmMemory(initial, maximum);
     }
 
