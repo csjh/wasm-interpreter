@@ -770,6 +770,45 @@ Instance::~Instance() {
     assert(stack == stack_start);
     free(stack_start);
 }
+
+WasmMemory::WasmMemory() : memory(nullptr), current(0), maximum(0) {}
+
+WasmMemory::WasmMemory(uint32_t initial, uint32_t maximum)
+    : memory(
+          static_cast<uint8_t *>(calloc(initial * PAGE_SIZE, sizeof(uint8_t)))),
+      current(initial), maximum(maximum) {}
+
+WasmMemory::~WasmMemory() {
+    if (memory) {
+        free(memory);
+    }
+}
+
+uint32_t WasmMemory::size() { return current; }
+
+uint32_t WasmMemory::grow(uint32_t delta) {
+    uint32_t new_current = current + delta;
+    if (new_current <= maximum) {
+        return -1;
+    }
+
+    uint8_t *new_memory = (uint8_t *)realloc(memory, new_current * PAGE_SIZE);
+    if (new_memory == NULL)
+        return -1;
+    memory = new_memory;
+    std::memset(memory + current * PAGE_SIZE, 0, delta * PAGE_SIZE);
+
+    uint32_t old_current = current;
+    current = new_current;
+    return old_current;
+}
+
+void WasmMemory::copy_into(uint32_t ptr, const uint8_t *data, uint32_t length) {
+    if (ptr + length > current * PAGE_SIZE) {
+        trap("out of bounds memory access");
+    }
+    std::memcpy(memory + ptr, data, length);
+}
 } // namespace mitey
 
 /*
