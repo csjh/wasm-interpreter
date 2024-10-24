@@ -17,9 +17,9 @@ enum class valtype : uint8_t {
     // // vectype
     // v128 = 0x7b,
 
-    // // reftype
-    // funcref = 0x70,
-    // externref = 0x6f,
+    // reftype
+    funcref = 0x70,
+    externref = 0x6f,
 };
 
 static inline bool is_valtype(uint8_t byte) {
@@ -27,6 +27,11 @@ static inline bool is_valtype(uint8_t byte) {
            byte == static_cast<uint8_t>(valtype::i64) ||
            byte == static_cast<uint8_t>(valtype::f32) ||
            byte == static_cast<uint8_t>(valtype::f64);
+}
+
+static inline bool is_reftype(uint8_t byte) {
+    return byte == static_cast<uint8_t>(valtype::funcref) ||
+           byte == static_cast<uint8_t>(valtype::externref);
 }
 
 struct Signature {
