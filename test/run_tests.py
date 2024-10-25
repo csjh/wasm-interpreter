@@ -14,7 +14,7 @@ for file in os.listdir("core"):
         )
         if os.system(f"wast2json {input_path} -o {output_path}") != 0:
             print(f"Failed to convert {input_path} to wast-json")
-            break
+            continue
 
         print(f"Testing {file}")
         if os.system(f"./executor {output_path}") != 0:
