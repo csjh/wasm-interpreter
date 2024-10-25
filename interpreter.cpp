@@ -397,8 +397,8 @@ void Instance::interpret(uint8_t *iter) {
         std::vector<BrTarget> &control_stack = frame().control_stack;
         BrTarget target = control_stack[control_stack.size() - depth];
         control_stack.erase(control_stack.end() - depth, control_stack.end());
-        std::memcpy(target.stack, stack - target.arity,
-                    target.arity * sizeof(WasmValue));
+        std::memmove(target.stack, stack - target.arity,
+                     target.arity * sizeof(WasmValue));
         stack = target.stack + target.arity;
         iter = target.dest;
         if (control_stack.empty()) {
