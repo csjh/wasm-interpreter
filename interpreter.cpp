@@ -470,7 +470,11 @@ void Instance::prepare_to_call(const FunctionInfo &fn, uint8_t *return_to) {
                    {{locals_start, return_to,
                      static_cast<uint32_t>(fn.type.results.size())}}});
 
+#if WASM_DEBUG
+    constexpr size_t MAX_DEPTH = 1'000;
+#else
     constexpr size_t MAX_DEPTH = 1'000'000;
+#endif
     if (frames.size() > MAX_DEPTH) {
         trap("call stack exhausted");
     }
