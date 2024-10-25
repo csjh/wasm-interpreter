@@ -599,6 +599,13 @@ void Instance::interpret(uint8_t *iter) {
     auto push = [&](WasmValue value) { *stack++ = value; };
     auto pop = [&]() { return *--stack; };
 
+    using i32 = int32_t;
+    using u32 = uint32_t;
+    using i64 = int64_t;
+    using u64 = uint64_t;
+    using f32 = float;
+    using f64 = double;
+
     /*
         (functions and ifs are blocks)
 
@@ -655,9 +662,8 @@ void Instance::interpret(uint8_t *iter) {
         if (stack[0].type == 0) {                                              \
             trap("integer divide by zero");                                    \
         }                                                                      \
-        using Ty = decltype(stack[-1].type);                                   \
-        if (stack[0].type == static_cast<Ty>(-1) &&                            \
-            stack[-1].type == std::numeric_limits<Ty>::min()) {                \
+        if (stack[0].type == static_cast<type>(-1) &&                          \
+            stack[-1].type == std::numeric_limits<type>::min()) {              \
             trap("integer overflow");                                          \
         }                                                                      \
         stack[-1] = stack[-1].type / stack[0].type;                            \
@@ -676,11 +682,16 @@ void Instance::interpret(uint8_t *iter) {
     {                                                                          \
         stack--;                                                               \
         if (isnan(stack[-1].type) || isnan(stack[0].type)) {                   \
-            stack[-1].type =                                                   \
-                std::numeric_limits<decltype(stack[0].type)>::quiet_NaN();     \
+            stack[-1].type = std::numeric_limits<type>::quiet_NaN();           \
         } else {                                                               \
             stack[-1].type = fn(stack[-1].type, stack[0].type);                \
         }                                                                      \
+        break;                                                                 \
+    }
+#define SHIFT(type, op)                                                        \
+    {                                                                          \
+        stack--;                                                               \
+        stack[-1] = stack[-1].type op(stack[0].type % (sizeof(type) * 8));     \
         break;                                                                 \
     }
 
@@ -966,12 +977,12 @@ void Instance::interpret(uint8_t *iter) {
         case i64or:        BINARY_OP(u64, | );
         case i32xor:       BINARY_OP(u32, ^ );
         case i64xor:       BINARY_OP(u64, ^ );
-        case i32shl:       BINARY_OP(u32, <<);
-        case i64shl:       BINARY_OP(u64, <<);
-        case i32shr_s:     BINARY_OP(i32, >>);
-        case i64shr_s:     BINARY_OP(i64, >>);
-        case i32shr_u:     BINARY_OP(u32, >>);
-        case i64shr_u:     BINARY_OP(u64, >>);
+        case i32shl:       SHIFT    (u32, <<);
+        case i64shl:       SHIFT    (u64, <<);
+        case i32shr_s:     SHIFT    (i32, >>);
+        case i64shr_s:     SHIFT    (i64, >>);
+        case i32shr_u:     SHIFT    (u32, >>);
+        case i64shr_u:     SHIFT    (u64, >>);
         case i32rotl:      BINARY_FN(u32, std::rotl);
         case i64rotl:      BINARY_FN(u64, std::rotl);
         case i32rotr:      BINARY_FN(u32, std::rotr);
