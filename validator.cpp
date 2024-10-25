@@ -45,7 +45,7 @@ class WasmStack : protected std::vector<valtype> {
     }
     void pop(valtype expected_ty) { pop(std::vector<valtype>{expected_ty}); }
     void pop(const std::vector<valtype> &expected) {
-        ensure(expected.size() <= size(), "not enough values on stack");
+        ensure(expected.size() <= size(), "type mismatch");
 
         // due to stack polymorphism there might only be a few actual types on
         // the stack
@@ -190,7 +190,7 @@ void Validator::validate(uint8_t *&iter, const Signature &signature,
         // else is basically an end to an if
         case else_:
         case end:
-            ensure(stack == signature.results, "stack doesn't match signature");
+            ensure(stack == signature.results, "type mismatch");
             return;
         case br: {
             check_br(safe_read_leb128<uint32_t>(iter));
@@ -255,7 +255,7 @@ void Validator::validate(uint8_t *&iter, const Signature &signature,
             stack.pop(stack.back());
             break;
         case select: {
-            ensure(stack.size() >= 3, "not enough values on stack");
+            ensure(stack.size() >= 3, "type mismatch");
             // first pop the condition
             stack.pop(valtype::i32);
             valtype ty = stack.back();

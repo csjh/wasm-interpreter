@@ -84,20 +84,22 @@ class WasmMemory {
     uint32_t grow(uint32_t delta);
 
     template <typename T>
-    T load(uint32_t ptr, uint32_t offset, uint32_t align) {
+    T load(uint32_t ptr, uint32_t offset, uint32_t /* align */) {
         uint8_t *effective = memory + ptr + offset;
-        if (reinterpret_cast<uint64_t>(effective) % align != 0)
-            __builtin_unreachable();
+        if (effective + sizeof(T) > memory + current * PAGE_SIZE) {
+            trap("out of bounds memory access");
+        }
         T value;
         std::memcpy(&value, effective, sizeof(T));
         return value;
     }
 
     template <typename T>
-    void store(uint32_t ptr, uint32_t offset, uint32_t align, T value) {
+    void store(uint32_t ptr, uint32_t offset, uint32_t /* align */, T value) {
         uint8_t *effective = memory + ptr + offset;
-        if (reinterpret_cast<uint64_t>(effective) % align != 0)
-            __builtin_unreachable();
+        if (effective + sizeof(T) > memory + current * PAGE_SIZE) {
+            trap("out of bounds memory access");
+        }
         std::memcpy(effective, &value, sizeof(T));
     }
 

@@ -515,7 +515,7 @@ void Instance::interpret(uint8_t *iter) {
         using Ty = decltype(stack[-1].type);                                   \
         if (stack[0].type == static_cast<Ty>(-1) &&                            \
             stack[-1].type == std::numeric_limits<Ty>::min()) {                \
-            trap("integer overflow");                                   \
+            trap("integer overflow");                                          \
         }                                                                      \
         stack[-1] = stack[-1].type / stack[0].type;                            \
         break;                                                                 \
@@ -524,7 +524,7 @@ void Instance::interpret(uint8_t *iter) {
     {                                                                          \
         stack--;                                                               \
         if (stack[0].type == 0) {                                              \
-            trap("integer divide by zero");                                         \
+            trap("integer divide by zero");                                    \
         }                                                                      \
         stack[-1] = stack[-1].type % stack[0].type;                            \
         break;                                                                 \
@@ -543,8 +543,8 @@ void Instance::interpret(uint8_t *iter) {
         stack -= 2;                                                            \
         uint32_t align = 1 << *iter++;                                         \
         uint32_t offset = read_leb128(iter);                                   \
-        memory.store<type>(stack[1].u32, offset, align,                        \
-                           static_cast<type>(stack[0].stacktype));             \
+        memory.store<type>(stack[0].u32, offset, align,                        \
+                           static_cast<type>(stack[1].stacktype));             \
         break;                                                                 \
     }
 
@@ -1028,7 +1028,7 @@ uint32_t WasmMemory::size() { return current; }
 
 uint32_t WasmMemory::grow(uint32_t delta) {
     uint32_t new_current = current + delta;
-    if (new_current <= maximum) {
+    if (new_current > maximum) {
         return -1;
     }
 
@@ -1101,7 +1101,7 @@ uint32_t WasmTable::grow(uint32_t delta, WasmValue value) {
 
 WasmValue WasmTable::get(uint32_t idx) {
     if (idx >= current) {
-        trap("out of bounds table access");
+        trap("undefined element");
     }
     return elements[idx];
 }
