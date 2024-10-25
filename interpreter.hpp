@@ -248,7 +248,7 @@ class Instance {
     void prepare_to_call(const FunctionInfo &idx, uint8_t *return_to);
     void interpret(uint8_t *iter);
 
-    WasmValue interpret_const(uint8_t *&iter);
+    WasmValue interpret_const(uint8_t *&iter, valtype expected);
 
     template <typename T> void push_arg(T arg);
     template <typename ReturnType> ReturnType pop_result();

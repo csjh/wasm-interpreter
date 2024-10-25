@@ -178,7 +178,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
             mut global_mut = static_cast<mut>(maybe_mut);
 
             globals.emplace_back(
-                WasmGlobal{type, global_mut, interpret_const(iter)});
+                WasmGlobal{type, global_mut, interpret_const(iter, type)});
         }
     }
 
@@ -246,7 +246,8 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
                         }
                         uint32_t n_elements = safe_read_leb128<uint32_t>(iter);
                         for (uint32_t j = 0; j < n_elements; j++) {
-                            interpret_const(iter);
+                            interpret_const(iter,
+                                            static_cast<valtype>(reftype));
                         }
                     } else {
                         // flags = 3
@@ -275,7 +276,8 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
                         uint32_t n_elements = safe_read_leb128<uint32_t>(iter);
                         std::vector<WasmValue> elem{n_elements};
                         for (uint32_t j = 0; j < n_elements; j++) {
-                            WasmValue el = interpret_const(iter);
+                            WasmValue el = interpret_const(
+                                iter, static_cast<valtype>(reftype));
                             elem.push_back(el);
                         }
                         elements.emplace_back(elem);
@@ -305,7 +307,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
                 uint32_t table_idx =
                     flags & 0b10 ? safe_read_leb128<uint32_t>(iter) : 0;
 
-                uint32_t offset = interpret_const(iter).u32;
+                uint32_t offset = interpret_const(iter, valtype::i32).u32;
                 if (offset >= tables[table_idx].size()) {
                     throw malformed_error("invalid table offset");
                 }
@@ -315,14 +317,15 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
                 if (flags & 0b100) {
                     // flags = 4 or 6
                     // characteristics: active, elem type + exprs
-                    if (flags & 0b10) {
-                        uint8_t reftype = *iter++;
-                        if (!is_reftype(reftype)) {
-                            throw malformed_error("invalid reftype");
-                        }
+                    uint8_t reftype =
+                        flags & 0b10 ? *iter++
+                                     : static_cast<uint8_t>(valtype::funcref);
+                    if (!is_reftype(reftype)) {
+                        throw malformed_error("invalid reftype");
                     }
                     for (uint32_t j = 0; j < n_elements; j++) {
-                        WasmValue el = interpret_const(iter);
+                        WasmValue el = interpret_const(
+                            iter, static_cast<valtype>(reftype));
                         elem.push_back(el);
                         tables[table_idx].set(offset + j, el);
                     }
@@ -428,7 +431,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
             } else {
                 // active segment
 
-                uint32_t offset = interpret_const(iter).u32;
+                uint32_t offset = interpret_const(iter, valtype::i32).u32;
                 if (offset >= memory.size() * WasmMemory::PAGE_SIZE) {
                     throw malformed_error("invalid memory offset");
                 }
@@ -474,11 +477,24 @@ void Instance::prepare_to_call(const FunctionInfo &fn, uint8_t *return_to) {
 }
 
 // constant expressions (including extended const expression proposal)
-WasmValue Instance::interpret_const(uint8_t *&iter) {
+// this shoves validation and execution into one for simplicity(?)
+WasmValue Instance::interpret_const(uint8_t *&iter, valtype expected) {
+    std::vector<valtype> stack_types;
+
 #define OP(ty, op)                                                             \
     {                                                                          \
-        stack[-1].ty = stack[-1].ty op stack[0].ty;                            \
+        if (stack_types.size() < 2) {                                          \
+            throw validation_error("type mismatch");                           \
+        }                                                                      \
+        if (stack_types[stack_types.size() - 1] != stack_types.back()) {       \
+            throw validation_error("type mismatch");                           \
+        }                                                                      \
+        if (stack_types.back() != valtype::ty) {                               \
+            throw validation_error("type mismatch");                           \
+        }                                                                      \
+        stack_types.pop_back();                                                \
         stack--;                                                               \
+        stack[-1].ty = stack[-1].ty op stack[0].ty;                            \
         break;                                                                 \
     }
 #define I32_OP(op) OP(i32, op)
@@ -486,24 +502,37 @@ WasmValue Instance::interpret_const(uint8_t *&iter) {
 
     while (1) {
         uint8_t byte = *iter++;
+#ifdef WASM_DEBUG
+        std::cerr << "reading const instruction " << instructions[byte].c_str()
+                  << " at " << iter - bytes.get() << std::endl;
+        std::cerr << "stack contents: ";
+        for (WasmValue *p = stack_start; p < stack; ++p) {
+            std::cerr << p->u64 << " ";
+        }
+        std::cerr << std::endl << std::endl;
+#endif
         using enum Instruction;
         if (static_cast<Instruction>(byte) == end) {
             break;
         }
         switch (static_cast<Instruction>(byte)) {
         case i32const:
-            *stack++ = safe_read_leb128<int32_t>(iter);
+            *stack++ = safe_read_sleb128<int32_t>(iter);
+            stack_types.push_back(valtype::i32);
             break;
         case i64const:
-            *stack++ = safe_read_leb128<int64_t>(iter);
+            *stack++ = safe_read_sleb128<int64_t>(iter);
+            stack_types.push_back(valtype::i64);
             break;
         case f32const:
             *stack++ = *reinterpret_cast<float *>(iter);
             iter += sizeof(float);
+            stack_types.push_back(valtype::f32);
             break;
         case f64const:
             *stack++ = *reinterpret_cast<double *>(iter);
             iter += sizeof(double);
+            stack_types.push_back(valtype::f64);
             break;
         case globalget: {
             uint32_t global_idx = safe_read_leb128<uint32_t>(iter);
@@ -511,6 +540,7 @@ WasmValue Instance::interpret_const(uint8_t *&iter) {
                 throw malformed_error("unknown global");
             }
             *stack++ = globals[global_idx].value;
+            stack_types.push_back(globals[global_idx].type);
             break;
         }
         case i32add:
@@ -525,9 +555,15 @@ WasmValue Instance::interpret_const(uint8_t *&iter) {
             I64_OP(-);
         case i64mul:
             I64_OP(*);
-        case ref_null:
+        case ref_null: {
             *stack++ = nullptr;
+            uint32_t reftype = safe_read_leb128<uint32_t>(iter);
+            if (!is_reftype(reftype)) {
+                throw validation_error("invalid reference type");
+            }
+            stack_types.push_back(static_cast<valtype>(reftype));
             break;
+        }
         case ref_func: {
             uint32_t func_idx = safe_read_leb128<uint32_t>(iter);
             if (func_idx >= functions.size()) {
@@ -535,10 +571,11 @@ WasmValue Instance::interpret_const(uint8_t *&iter) {
             }
             *stack++ =
                 Funcref{functions[func_idx].type.typeidx, true, func_idx};
+            stack_types.push_back(valtype::funcref);
             break;
         }
         default:
-            throw malformed_error("invalid instruction in const expression");
+            throw validation_error("constant expression required");
         }
     }
 
@@ -546,9 +583,14 @@ WasmValue Instance::interpret_const(uint8_t *&iter) {
 #undef I32_OP
 #undef I64_OP
 
-    if (stack - stack_start != 1) {
-        throw malformed_error("Incorrect number of results");
+    if (stack - stack_start != 1 || stack_types.size() != 1 ||
+        stack_types[0] != expected) {
+        throw validation_error("type mismatch");
     }
+
+#ifdef WASM_DEBUG
+    std::cerr << "const expression result: " << stack[-1].u64 << std::endl;
+#endif
 
     return *--stack;
 }
