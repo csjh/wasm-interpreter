@@ -10,11 +10,6 @@
 #include <vector>
 
 namespace mitey {
-class malformed_error : public std::runtime_error {
-  public:
-    malformed_error(const std::string &message) : std::runtime_error(message) {}
-};
-
 class trap_error : public std::runtime_error {
   public:
     trap_error(const std::string &message) : std::runtime_error(message) {}

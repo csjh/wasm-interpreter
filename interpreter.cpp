@@ -12,7 +12,7 @@ namespace mitey {
 std::tuple<uint32_t, uint32_t> get_limits(uint8_t *&iter) {
     uint32_t flags = safe_read_leb128<uint32_t>(iter);
     if (flags != 0 && flags != 1) {
-        throw malformed_error("invalid flags");
+        throw validation_error("invalid flags");
     }
     uint32_t initial = safe_read_leb128<uint32_t>(iter);
     uint32_t maximum = flags == 1 ? safe_read_leb128<uint32_t>(iter)
@@ -29,12 +29,12 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
     uint8_t *iter = bytes.get();
     uint8_t *end = iter + length;
     if (std::strncmp(reinterpret_cast<char *>(iter), "\0asm", 4) != 0) {
-        throw malformed_error("invalid magic number");
+        throw validation_error("invalid magic number");
     }
     iter += 4;
 
     if (*reinterpret_cast<uint32_t *>(iter) != 1) {
-        throw malformed_error("invalid version");
+        throw validation_error("invalid version");
     }
     iter += sizeof(uint32_t);
 
@@ -58,7 +58,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
 
         for (uint32_t i = 0; i < n_types; ++i) {
             if (*iter != 0x60) {
-                throw malformed_error("invalid function type");
+                throw validation_error("invalid function type");
             }
             ++iter;
 
@@ -68,7 +68,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
             fn.params.reserve(n_params);
             for (uint32_t j = 0; j < n_params; ++j) {
                 if (!is_valtype(iter[j])) {
-                    throw malformed_error("invalid parameter type");
+                    throw validation_error("invalid parameter type");
                 }
                 fn.params.push_back(static_cast<valtype>(iter[j]));
             }
@@ -78,7 +78,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
             fn.results.reserve(n_results);
             for (uint32_t j = 0; j < n_results; ++j) {
                 if (!is_valtype(iter[j])) {
-                    throw malformed_error("invalid result type");
+                    throw validation_error("invalid result type");
                 }
                 fn.results.push_back(static_cast<valtype>(iter[j]));
             }
@@ -129,7 +129,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
         for (uint32_t i = 0; i < n_tables; ++i) {
             uint8_t elem_type = *iter++;
             if (!is_reftype(elem_type)) {
-                throw malformed_error("invalid table element type");
+                throw validation_error("invalid table element type");
             }
 
             auto [initial, maximum] = get_limits(iter);
@@ -167,13 +167,13 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
         for (uint32_t i = 0; i < n_globals; ++i) {
             uint8_t maybe_type = *iter++;
             if (!is_valtype(maybe_type)) {
-                throw malformed_error("invalid global type");
+                throw validation_error("invalid global type");
             }
             valtype type = static_cast<valtype>(maybe_type);
 
             uint8_t maybe_mut = *iter++;
             if (!is_mut(maybe_mut)) {
-                throw malformed_error("invalid global mutability");
+                throw validation_error("invalid global mutability");
             }
             mut global_mut = static_cast<mut>(maybe_mut);
 
@@ -197,7 +197,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
 
             uint8_t desc = *iter++;
             if (desc < 0 || desc > 3) {
-                throw malformed_error("invalid export description");
+                throw validation_error("invalid export description");
             }
             ExportDesc export_desc = static_cast<ExportDesc>(desc);
 
@@ -215,6 +215,9 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
         ++iter;
         /* uint32_t section_length = */ safe_read_leb128<uint32_t>(iter);
         start = safe_read_leb128<uint32_t>(iter);
+        if (start >= functions.size()) {
+            throw validation_error("invalid start function");
+        }
     }
 
     skip_custom_section();
@@ -230,7 +233,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
         for (uint32_t i = 0; i < n_elements; i++) {
             uint8_t flags = *iter++;
             if (flags & ~0b111) {
-                throw malformed_error("invalid element flags");
+                throw validation_error("invalid element flags");
             }
 
             if (flags & 1) {
@@ -242,7 +245,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
                         // characteristics: declarative, elem type + exprs
                         uint32_t reftype = *iter++;
                         if (!is_reftype(reftype)) {
-                            throw malformed_error("invalid reftype");
+                            throw validation_error("invalid reftype");
                         }
                         uint32_t n_elements = safe_read_leb128<uint32_t>(iter);
                         for (uint32_t j = 0; j < n_elements; j++) {
@@ -254,14 +257,14 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
                         // characteristics: declarative, elem kind + indices
                         uint8_t elemkind = *iter++;
                         if (elemkind != 0) {
-                            throw malformed_error("invalid elemkind");
+                            throw validation_error("invalid elemkind");
                         }
                         uint32_t n_elements = safe_read_leb128<uint32_t>(iter);
                         for (uint32_t j = 0; j < n_elements; j++) {
                             uint32_t elem_idx =
                                 safe_read_leb128<uint32_t>(iter);
                             if (elem_idx >= functions.size()) {
-                                throw malformed_error("invalid element index");
+                                throw validation_error("invalid element index");
                             }
                         }
                     }
@@ -271,7 +274,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
                         // characteristics: passive, elem type + exprs
                         uint8_t reftype = *iter++;
                         if (!is_reftype(reftype)) {
-                            throw malformed_error("invalid reftype");
+                            throw validation_error("invalid reftype");
                         }
                         uint32_t n_elements = safe_read_leb128<uint32_t>(iter);
                         std::vector<WasmValue> elem{n_elements};
@@ -286,7 +289,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
                         // characteristics: passive, elem kind + indices
                         uint8_t elemkind = *iter++;
                         if (elemkind != 0) {
-                            throw malformed_error("invalid elemkind");
+                            throw validation_error("invalid elemkind");
                         }
                         uint32_t n_elements = safe_read_leb128<uint32_t>(iter);
                         std::vector<WasmValue> elem{n_elements};
@@ -294,7 +297,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
                             uint32_t elem_idx =
                                 safe_read_leb128<uint32_t>(iter);
                             if (elem_idx >= functions.size()) {
-                                throw malformed_error("invalid element index");
+                                throw validation_error("invalid element index");
                             }
                             elem.push_back(
                                 Funcref{functions[elem_idx].type.typeidx, true,
@@ -309,7 +312,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
 
                 uint32_t offset = interpret_const(iter, valtype::i32).u32;
                 if (offset >= tables[table_idx].size()) {
-                    throw malformed_error("invalid table offset");
+                    throw validation_error("invalid table offset");
                 }
 
                 uint32_t n_elements = safe_read_leb128<uint32_t>(iter);
@@ -321,7 +324,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
                         flags & 0b10 ? *iter++
                                      : static_cast<uint8_t>(valtype::funcref);
                     if (!is_reftype(reftype)) {
-                        throw malformed_error("invalid reftype");
+                        throw validation_error("invalid reftype");
                     }
                     for (uint32_t j = 0; j < n_elements; j++) {
                         WasmValue el = interpret_const(
@@ -333,7 +336,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
                     if (flags & 0b10) {
                         uint8_t elemkind = *iter++;
                         if (elemkind != 0) {
-                            throw malformed_error("invalid elemkind");
+                            throw validation_error("invalid elemkind");
                         }
                     }
                     // flags = 0 or 2
@@ -341,7 +344,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
                     for (uint32_t j = 0; j < n_elements; j++) {
                         uint32_t elem_idx = safe_read_leb128<uint32_t>(iter);
                         if (elem_idx >= functions.size()) {
-                            throw malformed_error("invalid element index");
+                            throw validation_error("invalid element index");
                         }
                         WasmValue funcref = Funcref{
                             functions[elem_idx].type.typeidx, true, elem_idx};
@@ -372,7 +375,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
         uint32_t n_functions = safe_read_leb128<uint32_t>(iter);
 
         if (n_functions != functions.size()) {
-            throw malformed_error("function count mismatch");
+            throw validation_error("function count mismatch");
         }
 
         for (FunctionInfo &fn : functions) {
@@ -386,7 +389,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
                 uint32_t n_locals = safe_read_leb128<uint32_t>(iter);
                 uint8_t type = *iter++;
                 if (!is_valtype(type)) {
-                    throw malformed_error("invalid local type");
+                    throw validation_error("invalid local type");
                 }
                 while (n_locals--) {
                     fn.locals.push_back(static_cast<valtype>(type));
@@ -409,14 +412,14 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
         for (uint32_t i = 0; i < n_data; i++) {
             uint32_t segment_flag = *iter++;
             if (segment_flag & ~0b11) {
-                throw malformed_error("invalid data segment flag");
+                throw validation_error("invalid data segment flag");
             }
 
             uint32_t memidx =
                 segment_flag & 0b10 ? safe_read_leb128<uint32_t>(iter) : 0;
 
             if (memidx != 0) {
-                throw malformed_error("non-zero memory index");
+                throw validation_error("non-zero memory index");
             }
 
             if (segment_flag & 1) {
@@ -433,7 +436,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
 
                 uint32_t offset = interpret_const(iter, valtype::i32).u32;
                 if (offset >= memory.size() * WasmMemory::PAGE_SIZE) {
-                    throw malformed_error("invalid memory offset");
+                    throw validation_error("invalid memory offset");
                 }
 
                 uint32_t data_length = safe_read_leb128<uint32_t>(iter);
@@ -541,7 +544,7 @@ WasmValue Instance::interpret_const(uint8_t *&iter, valtype expected) {
         case globalget: {
             uint32_t global_idx = safe_read_leb128<uint32_t>(iter);
             if (global_idx >= globals.size()) {
-                throw malformed_error("unknown global");
+                throw validation_error("unknown global");
             }
             *stack++ = globals[global_idx].value;
             stack_types.push_back(globals[global_idx].type);
