@@ -680,10 +680,11 @@ void Instance::interpret(uint8_t *iter) {
         }
         case if_: {
             Signature sn = read_blocktype(iter);
+            uint32_t cond = pop().u32;
             frame().control_stack.push_back(
                 {stack - sn.params.size(), if_jumps[iter].end,
                  static_cast<uint32_t>(sn.results.size())});
-            if (!pop().i32)
+            if (!cond)
                 iter = if_jumps[iter].else_;
             break;
         }
