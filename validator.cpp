@@ -62,7 +62,7 @@ class WasmStack : protected std::vector<valtype> {
     }
 
     valtype back() const {
-        ensure(!empty(), "stack is empty");
+        ensure(!empty(), "type mismatch");
         // default to i32, shouldn't really matter
         return std::vector<valtype>::empty() && polymorphized
                    ? valtype::i32
@@ -234,8 +234,7 @@ void Validator::validate(uint8_t *&iter, const Signature &signature,
             break;
         case call: {
             uint32_t fn_idx = safe_read_leb128<uint32_t>(iter);
-            ensure(fn_idx < instance.functions.size(),
-                   "invalid function index");
+            ensure(fn_idx < instance.functions.size(), "unknown function");
 
             FunctionInfo &fn = instance.functions[fn_idx];
             apply(fn.type);
@@ -256,7 +255,7 @@ void Validator::validate(uint8_t *&iter, const Signature &signature,
             break;
         }
         case drop:
-            ensure(!stack.empty(), "stack is empty");
+            ensure(!stack.empty(), "type mismatch");
             stack.pop(stack.back());
             break;
         case select: {
@@ -270,21 +269,21 @@ void Validator::validate(uint8_t *&iter, const Signature &signature,
         }
         case localget: {
             uint32_t local_idx = safe_read_leb128<uint32_t>(iter);
-            ensure(local_idx < current_fn.locals.size(), "invalid local index");
+            ensure(local_idx < current_fn.locals.size(), "unknown local");
             valtype local_ty = current_fn.locals[local_idx];
             apply({{}, {local_ty}});
             break;
         }
         case localset: {
             uint32_t local_idx = safe_read_leb128<uint32_t>(iter);
-            ensure(local_idx < current_fn.locals.size(), "invalid local index");
+            ensure(local_idx < current_fn.locals.size(), "unknown local");
             valtype local_ty = current_fn.locals[local_idx];
             apply({{local_ty}, {}});
             break;
         }
         case localtee: {
             uint32_t local_idx = safe_read_leb128<uint32_t>(iter);
-            ensure(local_idx < current_fn.locals.size(), "invalid local index");
+            ensure(local_idx < current_fn.locals.size(), "unknown local");
             valtype locaL_ty = current_fn.locals[local_idx];
             apply({{locaL_ty}, {locaL_ty}});
             break;
@@ -305,16 +304,14 @@ void Validator::validate(uint8_t *&iter, const Signature &signature,
         }
         case globalget: {
             uint32_t global_idx = safe_read_leb128<uint32_t>(iter);
-            ensure(global_idx < instance.globals.size(),
-                   "invalid global index");
+            ensure(global_idx < instance.globals.size(), "unknown global");
             valtype global_ty = instance.globals[global_idx].type;
             apply({{}, {global_ty}});
             break;
         }
         case globalset: {
             uint32_t global_idx = safe_read_leb128<uint32_t>(iter);
-            ensure(global_idx < instance.globals.size(),
-                   "invalid global index");
+            ensure(global_idx < instance.globals.size(), "unknown global");
             valtype global_ty = instance.globals[global_idx].type;
             apply({{global_ty}, {}});
             break;

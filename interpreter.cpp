@@ -109,6 +109,9 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
 
         for (uint32_t i = 0; i < n_functions; ++i) {
             uint32_t type_idx = safe_read_leb128<uint32_t>(iter);
+            if (type_idx >= types.size()) {
+                throw validation_error("unknown type");
+            }
             functions.emplace_back(FunctionInfo{nullptr, types[type_idx], {}});
         }
     }
@@ -144,7 +147,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
 
         uint32_t n_memories = safe_read_leb128<uint32_t>(iter);
         if (n_memories > 1) {
-            throw malformed_error("multiple memories");
+            throw validation_error("multiple memories");
         }
 
         auto [initial, maximum] = get_limits(iter);
@@ -505,7 +508,7 @@ WasmValue Instance::interpret_const(uint8_t *&iter) {
         case globalget: {
             uint32_t global_idx = safe_read_leb128<uint32_t>(iter);
             if (global_idx >= globals.size()) {
-                throw malformed_error("invalid global index");
+                throw malformed_error("unknown global");
             }
             *stack++ = globals[global_idx].value;
             break;
@@ -528,7 +531,7 @@ WasmValue Instance::interpret_const(uint8_t *&iter) {
         case ref_func: {
             uint32_t func_idx = safe_read_leb128<uint32_t>(iter);
             if (func_idx >= functions.size()) {
-                throw malformed_error("invalid function index");
+                throw validation_error("unknown function");
             }
             *stack++ =
                 Funcref{functions[func_idx].type.typeidx, true, func_idx};
