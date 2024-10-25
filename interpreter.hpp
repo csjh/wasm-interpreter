@@ -304,7 +304,13 @@ class Instance {
         }
 
         prepare_to_call(fn, nullptr);
-        interpret(fn.start);
+        try {
+            interpret(fn.start);
+        } catch (trap_error &e) {
+            stack = stack_start;
+            frames.clear();
+            throw;
+        }
 
         stack = stack_start;
         return std::vector<WasmValue>(stack, stack + fn.type.results.size());
@@ -392,7 +398,13 @@ std::invoke_result_t<FuncPointer, Args...> Instance::execute(uint32_t idx,
     std::apply([&](auto... arg) { (push_arg(arg), ...); }, FnArgs(args...));
 
     prepare_to_call(fn, nullptr);
-    interpret(fn.start);
+    try {
+        interpret(fn.start);
+    } catch (trap_error &e) {
+        stack = stack_start;
+        frames.clear();
+        throw;
+    }
 
     if constexpr (!std::is_same_v<ReturnType, void>) {
         return pop_result<ReturnType>();
