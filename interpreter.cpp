@@ -1,6 +1,7 @@
 #include "interpreter.hpp"
 #include "spec.hpp"
 #include "validator.hpp"
+#include <algorithm>
 #include <iostream>
 #include <limits>
 
@@ -1189,7 +1190,7 @@ WasmMemory::WasmMemory() : memory(nullptr), current(0), maximum(0) {}
 WasmMemory::WasmMemory(uint32_t initial, uint32_t maximum)
     : memory(
           static_cast<uint8_t *>(calloc(initial * PAGE_SIZE, sizeof(uint8_t)))),
-      current(initial), maximum(maximum) {}
+      current(initial), maximum(std::min(maximum, MAX_PAGES)) {}
 
 WasmMemory::~WasmMemory() {
     if (memory) {

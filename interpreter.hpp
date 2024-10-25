@@ -62,6 +62,8 @@ class WasmMemory {
     uint32_t current;
     uint32_t maximum;
 
+    static const uint32_t MAX_PAGES = 65536;
+
   public:
     static const uint32_t PAGE_SIZE = 65536;
 
