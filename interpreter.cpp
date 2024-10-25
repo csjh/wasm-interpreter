@@ -624,11 +624,11 @@ void Instance::interpret(uint8_t *iter) {
         break;                                                                 \
     }
 
-#define LOAD(type)                                                             \
+#define LOAD(type, memtype)                                                    \
     {                                                                          \
         uint32_t align = 1 << *iter++;                                         \
         uint32_t offset = read_leb128(iter);                                   \
-        stack[-1] = memory.load<type>(stack[-1].u32, offset, align);           \
+        stack[-1].type = memory.load<memtype>(stack[-1].u32, offset, align);   \
         break;                                                                 \
     }
 
@@ -822,20 +822,20 @@ void Instance::interpret(uint8_t *iter) {
             iter += sizeof(double);
             break;
         // clang-format off
-        case i32load:      LOAD(uint32_t);
-        case i64load:      LOAD(uint64_t);
-        case f32load:      LOAD(float);
-        case f64load:      LOAD(double);
-        case i32load8_s:   LOAD(int8_t);
-        case i32load8_u:   LOAD(uint8_t);
-        case i32load16_s:  LOAD(int16_t);
-        case i32load16_u:  LOAD(uint16_t);
-        case i64load8_s:   LOAD(int8_t);
-        case i64load8_u:   LOAD(uint8_t);
-        case i64load16_s:  LOAD(int16_t);
-        case i64load16_u:  LOAD(uint16_t);
-        case i64load32_s:  LOAD(int32_t);
-        case i64load32_u:  LOAD(uint32_t);
+        case i32load:      LOAD(u32, uint32_t);
+        case i64load:      LOAD(u64, uint64_t);
+        case f32load:      LOAD(f32, float);
+        case f64load:      LOAD(f64, double);
+        case i32load8_s:   LOAD(i32, int8_t);
+        case i32load8_u:   LOAD(u32, uint8_t);
+        case i32load16_s:  LOAD(i32, int16_t);
+        case i32load16_u:  LOAD(u32, uint16_t);
+        case i64load8_s:   LOAD(i64, int8_t);
+        case i64load8_u:   LOAD(u64, uint8_t);
+        case i64load16_s:  LOAD(i64, int16_t);
+        case i64load16_u:  LOAD(u64, uint16_t);
+        case i64load32_s:  LOAD(i64, int32_t);
+        case i64load32_u:  LOAD(u64, uint32_t);
         case i32store:     STORE(uint32_t, u32);
         case i64store:     STORE(uint64_t, u64);
         case f32store:     STORE(float, f32);
