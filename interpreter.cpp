@@ -149,10 +149,10 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
         uint32_t n_memories = safe_read_leb128<uint32_t>(iter);
         if (n_memories > 1) {
             throw validation_error("multiple memories");
+        } else if (n_memories == 1) {
+            auto [initial, maximum] = get_limits(iter);
+            new (&memory) WasmMemory(initial, maximum);
         }
-
-        auto [initial, maximum] = get_limits(iter);
-        new (&memory) WasmMemory(initial, maximum);
     }
 
     skip_custom_section();

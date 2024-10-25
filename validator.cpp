@@ -31,7 +31,7 @@ class WasmStack : protected std::vector<valtype> {
   public:
     bool operator==(const std::vector<valtype> &rhs) {
         pop(rhs);
-        return polymorphized || empty();
+        return std::vector<valtype>::empty();
     }
 
     void polymorphize() {
