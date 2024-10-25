@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <stdexcept>
 #include <string>
 #include <system_error>
 #include <variant>
@@ -289,7 +290,17 @@ int main(int argv, char **argc) {
                 std::cerr << "Expected validation error for file: "
                           << m.filename << std::endl;
                 return 1;
-            } catch (mitey::malformed_error &e) {
+            } catch (mitey::validation_error &e) {
+                if (std::string(e.what()) != m.text) {
+                    std::cerr << "Expected validation error: " << m.text
+                              << " but got: " << e.what() << std::endl;
+                    return 1;
+                }
+            } catch (std::runtime_error &e) {
+                std::cerr << "Expected validation error for file: "
+                          << m.filename << " but got: " << e.what()
+                          << std::endl;
+                return 1;
             }
         } else if (std::holds_alternative<test_trap>(t)) {
             auto &m = std::get<test_trap>(t);
@@ -301,11 +312,15 @@ int main(int argv, char **argc) {
                           << std::endl;
                 return 1;
             } catch (mitey::trap_error &e) {
-                if (e.what() != m.text) {
+                if (std::string(e.what()) != m.text) {
                     std::cerr << "Expected trap: " << m.text
                               << " but got: " << e.what() << std::endl;
                     return 1;
                 }
+            } catch (std::runtime_error &e) {
+                std::cerr << "Expected trap for action: " << m.action.field
+                          << " but got: " << e.what() << std::endl;
+                return 1;
             }
         } else if (std::holds_alternative<test_exhaustion>(t)) {
             // auto &m = std::get<test_exhaustion>(t);
