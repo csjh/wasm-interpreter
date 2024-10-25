@@ -134,7 +134,7 @@ struct test_exhaustion {
     int line;
     action action;
     std::string text;
-    std::vector<value> expected;
+    std::vector<only_type> expected;
 };
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(test_exhaustion, type, line, action, text,
@@ -323,8 +323,26 @@ int main(int argv, char **argc) {
                 return 1;
             }
         } else if (std::holds_alternative<test_exhaustion>(t)) {
-            // auto &m = std::get<test_exhaustion>(t);
-            // todo: see if there's some memory trick to trap efficiently
+            auto &m = std::get<test_exhaustion>(t);
+            try {
+                auto result = instance->execute(m.action.field,
+                                                to_wasm_values(m.action.args));
+
+                std::cerr << "Expected exhaustion for action: "
+                          << m.action.field << std::endl;
+                return 1;
+            } catch (mitey::trap_error &e) {
+                if (std::string(e.what()) != m.text) {
+                    std::cerr << "Expected exhaustion: " << m.text
+                              << " but got: " << e.what() << std::endl;
+                    return 1;
+                }
+            } catch (std::runtime_error &e) {
+                std::cerr << "Expected exhaustion for action: "
+                          << m.action.field << " but got: " << e.what()
+                          << std::endl;
+                return 1;
+            }
         } else if (std::holds_alternative<test_action>(t)) {
             auto &m = std::get<test_action>(t);
             assert(m.expected.size() == 0);
