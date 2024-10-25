@@ -3,16 +3,13 @@
 
 namespace mitey {
 
-static inline void _ensure(bool condition, const std::string &expr, int line,
-                           const std::string &file, const std::string &msg) {
+static inline void _ensure(bool condition, const std::string &msg) {
     if (!condition) [[unlikely]] {
-        throw validation_error("validation error: " + msg + " (" + expr + ") " +
-                               file + ":" + std::to_string(line));
+        throw validation_error(msg);
     }
 }
 
-#define ensure(condition, msg)                                                 \
-    _ensure(condition, #condition, __LINE__, __FILE__, msg)
+#define ensure(condition, msg) _ensure(condition, msg)
 
 void Validator::validate() {
     for (const auto &fn : instance.functions) {
@@ -56,7 +53,7 @@ class WasmStack : protected std::vector<valtype> {
             std::min(std::vector<valtype>::size(), expected.size());
         ensure(std::equal(expected.rbegin(), expected.rbegin() + materialized,
                           rbegin()),
-               "values on stack don't match expected");
+               "type mismatch");
         erase(end() - materialized, end());
     }
 
