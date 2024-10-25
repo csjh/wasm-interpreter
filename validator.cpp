@@ -88,7 +88,7 @@ void Validator::validate(uint8_t *&iter, const Signature &signature,
     };
 
     auto check_br = [&](uint32_t depth) {
-        ensure(depth < control_stack.size(), "invalid depth");
+        ensure(depth < control_stack.size(), "unknown label");
         auto &expected_at_target =
             control_stack[control_stack.size() - depth - 1];
         stack.pop(expected_at_target);
