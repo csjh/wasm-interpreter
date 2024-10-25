@@ -28,10 +28,14 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
     // todo: use byte iterator or something
     uint8_t *iter = bytes.get();
     uint8_t *end = iter + length;
-    assert(std::strncmp(reinterpret_cast<char *>(iter), "\0asm", 4) == 0);
+    if (std::strncmp(reinterpret_cast<char *>(iter), "\0asm", 4) != 0) {
+        throw malformed_error("invalid magic number");
+    }
     iter += 4;
 
-    assert(*reinterpret_cast<uint32_t *>(iter) == 1);
+    if (*reinterpret_cast<uint32_t *>(iter) != 1) {
+        throw malformed_error("invalid version");
+    }
     iter += sizeof(uint32_t);
 
     auto skip_custom_section = [&]() {
@@ -53,7 +57,9 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
         types.reserve(n_types);
 
         for (uint32_t i = 0; i < n_types; ++i) {
-            assert(*iter == 0x60);
+            if (*iter != 0x60) {
+                throw malformed_error("invalid function type");
+            }
             ++iter;
 
             Signature fn{{}, {}, i};
@@ -61,7 +67,9 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
             uint32_t n_params = safe_read_leb128<uint32_t>(iter);
             fn.params.reserve(n_params);
             for (uint32_t j = 0; j < n_params; ++j) {
-                assert(is_valtype(iter[j]));
+                if (!is_valtype(iter[j])) {
+                    throw malformed_error("invalid parameter type");
+                }
                 fn.params.push_back(static_cast<valtype>(iter[j]));
             }
             iter += n_params;
@@ -69,7 +77,9 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
             uint32_t n_results = safe_read_leb128<uint32_t>(iter);
             fn.results.reserve(n_results);
             for (uint32_t j = 0; j < n_results; ++j) {
-                assert(is_valtype(iter[j]));
+                if (!is_valtype(iter[j])) {
+                    throw malformed_error("invalid result type");
+                }
                 fn.results.push_back(static_cast<valtype>(iter[j]));
             }
             iter += n_results;
@@ -153,11 +163,15 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
 
         for (uint32_t i = 0; i < n_globals; ++i) {
             uint8_t maybe_type = *iter++;
-            assert(is_valtype(maybe_type));
+            if (!is_valtype(maybe_type)) {
+                throw malformed_error("invalid global type");
+            }
             valtype type = static_cast<valtype>(maybe_type);
 
             uint8_t maybe_mut = *iter++;
-            assert(is_mut(maybe_mut));
+            if (!is_mut(maybe_mut)) {
+                throw malformed_error("invalid global mutability");
+            }
             mut global_mut = static_cast<mut>(maybe_mut);
 
             globals.emplace_back(
@@ -179,7 +193,9 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
             iter += name_len;
 
             uint8_t desc = *iter++;
-            assert(desc >= 0 && desc <= 3);
+            if (desc < 0 || desc > 3) {
+                throw malformed_error("invalid export description");
+            }
             ExportDesc export_desc = static_cast<ExportDesc>(desc);
 
             uint32_t idx = safe_read_leb128<uint32_t>(iter);
@@ -203,9 +219,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
     // element section
     if (iter != end && *iter == 9) {
         ++iter;
-        uint32_t section_length = safe_read_leb128<uint32_t>(iter);
-        iter += section_length;
-        /*
+        /* uint32_t section_length = */ safe_read_leb128<uint32_t>(iter);
         uint32_t n_elements = safe_read_leb128<uint32_t>(iter);
 
         elements.reserve(n_elements);
@@ -218,9 +232,71 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
 
             if (flags & 1) {
                 if (flags & 0b10) {
-
+                    // i don't know what declarative is for but i have to skip
+                    // the bytes somehow
+                    if (flags & 0b100) {
+                        // flags = 7
+                        // characteristics: declarative, elem type + exprs
+                        uint32_t reftype = *iter++;
+                        if (!is_reftype(reftype)) {
+                            throw malformed_error("invalid reftype");
+                        }
+                        uint32_t n_elements = safe_read_leb128<uint32_t>(iter);
+                        for (uint32_t j = 0; j < n_elements; j++) {
+                            interpret_const(iter);
+                        }
+                    } else {
+                        // flags = 3
+                        // characteristics: declarative, elem kind + indices
+                        uint8_t elemkind = *iter++;
+                        if (elemkind != 0) {
+                            throw malformed_error("invalid elemkind");
+                        }
+                        uint32_t n_elements = safe_read_leb128<uint32_t>(iter);
+                        for (uint32_t j = 0; j < n_elements; j++) {
+                            uint32_t elem_idx =
+                                safe_read_leb128<uint32_t>(iter);
+                            if (elem_idx >= functions.size()) {
+                                throw malformed_error("invalid element index");
+                            }
+                        }
+                    }
                 } else {
-                    // i don't know what declarative is for
+                    if (flags & 0b100) {
+                        // flags = 5
+                        // characteristics: passive, elem type + exprs
+                        uint8_t reftype = *iter++;
+                        if (!is_reftype(reftype)) {
+                            throw malformed_error("invalid reftype");
+                        }
+                        uint32_t n_elements = safe_read_leb128<uint32_t>(iter);
+                        std::vector<WasmValue> elem{n_elements};
+                        for (uint32_t j = 0; j < n_elements; j++) {
+                            WasmValue el = interpret_const(iter);
+                            elem.push_back(el);
+                        }
+                        elements.emplace_back(elem);
+                    } else {
+                        // flags = 1
+                        // characteristics: passive, elem kind + indices
+                        uint8_t elemkind = *iter++;
+                        if (elemkind != 0) {
+                            throw malformed_error("invalid elemkind");
+                        }
+                        uint32_t n_elements = safe_read_leb128<uint32_t>(iter);
+                        std::vector<WasmValue> elem{n_elements};
+                        for (uint32_t j = 0; j < n_elements; j++) {
+                            uint32_t elem_idx =
+                                safe_read_leb128<uint32_t>(iter);
+                            if (elem_idx >= functions.size()) {
+                                throw malformed_error("invalid element index");
+                            }
+                            elem.push_back(
+                                Funcref{functions[elem_idx].type.typeidx, true,
+                                        elem_idx});
+                        }
+                        elements.emplace_back(elem);
+                    }
                 }
             } else {
                 uint32_t table_idx =
@@ -234,28 +310,42 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
                 uint32_t n_elements = safe_read_leb128<uint32_t>(iter);
                 std::vector<WasmValue> elem{n_elements};
                 if (flags & 0b100) {
+                    // flags = 4 or 6
+                    // characteristics: active, elem type + exprs
+                    if (flags & 0b10) {
+                        uint8_t reftype = *iter++;
+                        if (!is_reftype(reftype)) {
+                            throw malformed_error("invalid reftype");
+                        }
+                    }
                     for (uint32_t j = 0; j < n_elements; j++) {
                         WasmValue el = interpret_const(iter);
                         elem.push_back(el);
                         tables[table_idx].set(offset + j, el);
                     }
                 } else {
+                    if (flags & 0b10) {
+                        uint8_t elemkind = *iter++;
+                        if (elemkind != 0) {
+                            throw malformed_error("invalid elemkind");
+                        }
+                    }
+                    // flags = 0 or 2
+                    // characteristics: active, elem kind + indices
                     for (uint32_t j = 0; j < n_elements; j++) {
-                        uint32_t elem_idx =
-                            safe_read_leb128<uint32_t>(iter);
+                        uint32_t elem_idx = safe_read_leb128<uint32_t>(iter);
                         if (elem_idx >= functions.size()) {
                             throw malformed_error("invalid element index");
                         }
-                        WasmValue funcref =
-                            Funcref{functions[elem_idx].type.typeidx, true,
-                                    elem_idx};
-                        elem.push_back(elem_idx);
-                        tables[table_idx].set(offset + j, elem_idx);
+                        WasmValue funcref = Funcref{
+                            functions[elem_idx].type.typeidx, true, elem_idx};
+                        elem.push_back(funcref);
+                        tables[table_idx].set(offset + j, funcref);
                     }
                 }
+                elements.emplace_back(elem);
             }
         }
-        */
     }
 
     skip_custom_section();
@@ -275,7 +365,9 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
         /* uint32_t section_length = */ safe_read_leb128<uint32_t>(iter);
         uint32_t n_functions = safe_read_leb128<uint32_t>(iter);
 
-        assert(n_functions == functions.size());
+        if (n_functions != functions.size()) {
+            throw malformed_error("function count mismatch");
+        }
 
         for (FunctionInfo &fn : functions) {
             fn.locals = fn.type.params;
@@ -287,7 +379,9 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
             while (n_local_decls--) {
                 uint32_t n_locals = safe_read_leb128<uint32_t>(iter);
                 uint8_t type = *iter++;
-                assert(is_valtype(type));
+                if (!is_valtype(type)) {
+                    throw malformed_error("invalid local type");
+                }
                 while (n_locals--) {
                     fn.locals.push_back(static_cast<valtype>(type));
                 }
