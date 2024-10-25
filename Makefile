@@ -2,7 +2,7 @@ DEBUG := 0
 
 CFLAGS := -Wall -Wextra -std=c++20
 
-debug: CFLAGS += -g3 -DWASM_DEBUG -fsanitize=address
+debug: CFLAGS += -Og -g3 -DWASM_DEBUG -fsanitize=address
 release: CFLAGS += -O2
 
 debug: executable tests
