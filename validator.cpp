@@ -207,10 +207,18 @@ void Validator::validate(uint8_t *&iter, const Signature &signature,
             stack.pop(valtype::i32);
             uint32_t n_targets = safe_read_leb128<uint32_t>(iter);
 
-            // <= because there's an extra for the default target
+            std::vector<uint32_t> targets;
             for (uint32_t i = 0; i <= n_targets; ++i) {
                 uint32_t target = safe_read_leb128<uint32_t>(iter);
                 check_br(target);
+                targets.push_back(target);
+            }
+            auto &expected_at_default =
+                control_stack[control_stack.size() - targets.back() - 1];
+            for (uint32_t i = 0; i < n_targets; ++i) {
+                ensure(expected_at_default ==
+                           control_stack[control_stack.size() - targets[i] - 1],
+                       "type mismatch");
             }
             stack.polymorphize();
             break;
