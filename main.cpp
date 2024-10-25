@@ -25,6 +25,6 @@ int main(int argv, char **argc) {
     fread(bytes, 1, length, file);
     fclose(file);
 
-    Mitey::Instance instance(
+    mitey::Instance instance(
         std::unique_ptr<uint8_t, void (*)(uint8_t *)>(bytes, free_u8), length);
 }
