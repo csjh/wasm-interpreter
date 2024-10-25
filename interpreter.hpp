@@ -4,6 +4,7 @@
 #include <cassert>
 #include <cstdint>
 #include <cstring>
+#include <iostream>
 #include <memory>
 #include <unordered_map>
 #include <vector>
@@ -23,6 +24,14 @@ class trap_error : public std::runtime_error {
     throw trap_error(message);
 }
 
+struct Funcref {
+    uint32_t typeidx;
+    bool nonnull : 1;
+    uint32_t funcidx : 31;
+};
+
+using Externref = void *;
+
 // technically unsigned versions don't exist but easier to use if they're here
 union WasmValue {
     int32_t i32;
@@ -31,6 +40,8 @@ union WasmValue {
     uint64_t u64;
     float f32;
     double f64;
+    Funcref funcref;
+    Externref externref;
 
     WasmValue(int32_t i32) : i32(i32) {}
     WasmValue(uint32_t u32) : u32(u32) {}
@@ -38,6 +49,8 @@ union WasmValue {
     WasmValue(uint64_t u64) : u64(u64) {}
     WasmValue(float f32) : f32(f32) {}
     WasmValue(double f64) : f64(f64) {}
+    WasmValue(Funcref funcref) : funcref(funcref) {}
+    WasmValue(Externref externref) : externref(externref) {}
 
     operator int32_t() { return i32; }
     operator uint32_t() { return u32; }
@@ -45,6 +58,8 @@ union WasmValue {
     operator uint64_t() { return u64; }
     operator float() { return f32; }
     operator double() { return f64; }
+    operator Funcref() { return funcref; }
+    operator Externref() { return externref; }
 };
 
 class WasmMemory {
@@ -66,7 +81,6 @@ class WasmMemory {
     ~WasmMemory();
 
     uint32_t size();
-
     uint32_t grow(uint32_t delta);
 
     template <typename T>
@@ -88,6 +102,35 @@ class WasmMemory {
     }
 
     void copy_into(uint32_t ptr, const uint8_t *data, uint32_t length);
+    void memcpy(uint32_t dst, uint32_t src, uint32_t length);
+    void memset(uint32_t dst, uint8_t value, uint32_t length);
+};
+
+class WasmTable {
+    WasmValue *elements;
+    uint32_t current;
+    uint32_t maximum;
+
+  public:
+    valtype type;
+
+    WasmTable(valtype type, uint32_t initial, uint32_t maximum);
+
+    WasmTable(const WasmTable &) = delete;
+    WasmTable &operator=(const WasmTable &) = delete;
+    WasmTable(WasmTable &&table);
+    WasmTable &operator=(WasmTable &&) = delete;
+
+    ~WasmTable();
+
+    uint32_t size();
+    uint32_t grow(uint32_t delta, WasmValue value);
+    WasmValue get(uint32_t idx);
+    void set(uint32_t idx, WasmValue value);
+
+    void copy_into(uint32_t ptr, const WasmValue *data, uint32_t length);
+    void memcpy(uint32_t dst, uint32_t src, uint32_t length);
+    void memset(uint32_t dst, WasmValue value, uint32_t length);
 };
 
 struct WasmGlobal {
@@ -171,10 +214,8 @@ class Instance {
     std::unordered_map<uint8_t *, uint8_t *> block_ends;
     // value of globals
     std::vector<WasmGlobal> globals;
-    // maps indices to the start of the function (mutable)
-    std::vector<uint8_t *> tables;
-    // maps element indices to the element in source bytes
-    std::vector<uint8_t *> elements;
+    // maps element indices to the element initializers
+    std::vector<std::vector<WasmValue>> elements;
     // types from type section
     std::vector<Signature> types;
     // exports from export section
@@ -183,6 +224,8 @@ class Instance {
     WasmValue *stack_start;
     // data segments
     std::vector<Segment> data_segments;
+    // tables
+    std::vector<WasmTable> tables;
 
     Signature read_blocktype(uint8_t *&iter) {
         uint8_t byte = *iter;
@@ -264,7 +307,7 @@ class Instance {
         interpret(fn.start);
 
         stack = stack_start;
-        return std::vector<WasmValue>{stack, stack + fn.type.results.size()};
+        return std::vector<WasmValue>(stack, stack + fn.type.results.size());
     }
 };
 

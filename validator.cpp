@@ -1,4 +1,5 @@
 #include "validator.hpp"
+#include "spec.hpp"
 
 namespace mitey {
 
@@ -118,6 +119,20 @@ void Validator::validate(uint8_t *&iter, const Signature &signature,
     using enum Instruction;
     while (1) {
         uint8_t byte = *iter++;
+
+#ifdef WASM_DEBUG
+        std::cerr << "reading instruction " << instructions[byte].c_str()
+                  << " at " << iter - instance.bytes.get() << std::endl;
+        std::cerr << "control stack size: " << control_stack.size()
+                  << std::endl;
+        std::cerr << "stack size: " << stack.size() << std::endl;
+        std::cerr << "control stack: ";
+        for (auto &target : control_stack) {
+            std::cerr << target.size() << " ";
+        }
+        std::cerr << std::endl;
+#endif
+
         ensure(is_instruction(byte), "invalid instruction");
         switch (static_cast<Instruction>(byte)) {
         case unreachable:
@@ -223,7 +238,9 @@ void Validator::validate(uint8_t *&iter, const Signature &signature,
             ensure(type_idx < instance.types.size(), "invalid type index");
 
             uint32_t table_idx = safe_read_leb128<uint32_t>(iter);
-            ensure(table_idx == 0, "invalid table index");
+            ensure(table_idx < instance.tables.size(), "invalid table index");
+            ensure(instance.tables[table_idx].type == valtype::funcref,
+                   "invalid table type for call_indirect");
 
             apply(instance.types[type_idx]);
             break;
@@ -260,6 +277,20 @@ void Validator::validate(uint8_t *&iter, const Signature &signature,
             ensure(local_idx < current_fn.locals.size(), "invalid local index");
             valtype locaL_ty = current_fn.locals[local_idx];
             apply({{locaL_ty}, {locaL_ty}});
+            break;
+        }
+        case tableget: {
+            uint32_t table_idx = safe_read_leb128<uint32_t>(iter);
+            ensure(table_idx < instance.tables.size(), "invalid table index");
+            valtype table_ty = instance.tables[table_idx].type;
+            apply({{valtype::i32}, {table_ty}});
+            break;
+        }
+        case tableset: {
+            uint32_t table_idx = safe_read_leb128<uint32_t>(iter);
+            ensure(table_idx < instance.tables.size(), "invalid table index");
+            valtype table_ty = instance.tables[table_idx].type;
+            apply({{valtype::i32, table_ty}, {}});
             break;
         }
         case globalget: {
@@ -454,6 +485,108 @@ void Validator::validate(uint8_t *&iter, const Signature &signature,
         case f32reinterpret_i32: apply({{valtype::i32}, {valtype::f32}}); break;
         case i64reinterpret_f64: apply({{valtype::f64}, {valtype::i64}}); break;
         case f64reinterpret_i64: apply({{valtype::i64}, {valtype::f64}}); break;
+        case ref_null: {
+            uint32_t type_idx = safe_read_leb128<uint32_t>(iter);
+            ensure(is_reftype(type_idx), "invalid reference type");
+            apply({{}, {static_cast<valtype>(type_idx)}});
+            break;
+        }
+        case ref_is_null: {
+            valtype peek = stack.back();
+            ensure(peek == valtype::funcref || peek == valtype::externref, "invalid reference type");
+            apply({{peek}, {valtype::i32}});
+            break;
+        }
+        case ref_func: {
+            uint32_t func_idx = safe_read_leb128<uint32_t>(iter);
+            ensure(func_idx < instance.functions.size(), "invalid function index");
+            apply({{}, {valtype::funcref}});
+            break;
+        }
+        case ref_eq: {
+            valtype peek = stack.back();
+            ensure(peek == valtype::funcref || peek == valtype::externref, "invalid reference type");
+            apply({{peek, peek}, {valtype::i32}});
+            break;
+        }
+        case multibyte: {
+            uint8_t byte = *iter++;
+            ensure(true, "invalid FC extension instruction");
+
+            using enum FCInstruction;
+            switch (static_cast<FCInstruction>(byte)) {
+                case memory_init: {
+                    ensure(instance.memory.size() > 0, "no memory");
+                    uint32_t seg_idx = safe_read_leb128<uint32_t>(iter);
+                    ensure(seg_idx < instance.data_segments.size(), "invalid segment index");
+
+                    apply({{valtype::i32, valtype::i32, valtype::i32}, {}});
+                    break;
+                }
+                case data_drop: {
+                    uint32_t seg_idx = safe_read_leb128<uint32_t>(iter);
+                    ensure(seg_idx < instance.data_segments.size(), "invalid segment index");
+                    break;
+                }
+                case memory_copy: {
+                    ensure(instance.memory.size() > 0, "no memory");
+
+                    apply({{valtype::i32, valtype::i32, valtype::i32}, {}});
+                    break;
+                }
+                case memory_fill: {
+                    ensure(instance.memory.size() > 0, "no memory");
+
+                    apply({{valtype::i32, valtype::i32, valtype::i32}, {}});
+                    break;
+                }
+                case table_init: {
+                    uint32_t table_idx = safe_read_leb128<uint32_t>(iter);
+                    ensure(table_idx < instance.tables.size(), "invalid table index");
+                    uint32_t seg_idx = safe_read_leb128<uint32_t>(iter);
+                    ensure(seg_idx < instance.elements.size(), "invalid segment index");
+
+                    apply({{valtype::i32, valtype::i32, valtype::i32}, {}});
+                    break;
+                }
+                case elem_drop: {
+                    uint32_t seg_idx = safe_read_leb128<uint32_t>(iter);
+                    ensure(seg_idx < instance.elements.size(), "invalid segment index");
+                    break;
+                }
+                case table_copy: {
+                    uint32_t src_table_idx = safe_read_leb128<uint32_t>(iter);
+                    ensure(src_table_idx < instance.tables.size(), "invalid table index");
+                    uint32_t dst_table_idx = safe_read_leb128<uint32_t>(iter);
+                    ensure(dst_table_idx < instance.tables.size(), "invalid table index");
+
+                    apply({{valtype::i32, valtype::i32, valtype::i32}, {}});
+                    break;
+                }
+                case table_grow: {
+                    uint32_t table_idx = safe_read_leb128<uint32_t>(iter);
+                    ensure(table_idx < instance.tables.size(), "invalid table index");
+
+                    apply({{instance.tables[table_idx].type, valtype::i32}, {valtype::i32}});
+                    break;
+                }
+                case table_size: {
+                    uint32_t table_idx = safe_read_leb128<uint32_t>(iter);
+                    ensure(table_idx < instance.tables.size(), "invalid table index");
+
+                    apply({{}, {valtype::i32}});
+                    break;
+                }
+                case table_fill: {
+                    uint32_t table_idx = safe_read_leb128<uint32_t>(iter);
+                    ensure(table_idx < instance.tables.size(), "invalid table index");
+
+                    apply({{valtype::i32, instance.tables[table_idx].type, valtype::i32}, {}});
+                    break;
+                }
+                default: ensure(false, "unimplemented FC extension instruction");
+            }
+        }
         default: ensure(false, "unimplemented instruction");
             // clang-format on
         };

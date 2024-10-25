@@ -37,6 +37,7 @@ static inline bool is_reftype(uint8_t byte) {
 struct Signature {
     std::vector<valtype> params;
     std::vector<valtype> results;
+    uint32_t typeidx = -1;
 };
 
 enum class mut {
@@ -122,7 +123,7 @@ enum class Instruction {
     localset = 0x21, globalset = 0x24,
     localtee = 0x22,
 
-    // insert table.{get,set} here
+    tableget = 0x25, tableset = 0x26,
 
     i32load = 0x28, i64load = 0x29,
     f32load = 0x2a, f64load = 0x2b,
@@ -215,6 +216,25 @@ enum class Instruction {
     i64reinterpret_f64 = 0xbd, f64reinterpret_i64 = 0xbf,
 
     // insert sign extension proposal here
+
+    ref_null = 0xd0, ref_is_null = 0xd1, ref_func = 0xd2,
+
+    // insert a couple typed function references instructions
+
+    ref_eq = 0xd5,
+
+    // typed func proposal
+
+    multibyte = 0xfc
+};
+
+enum class FCInstruction {
+    // i32_trunc_sat_f32_s = 0x00, i32_trunc_sat_f32_u = 0x01, i32_trunc_sat_f64_s = 0x02, i32_trunc_sat_f64_u = 0x03,
+    // i64_trunc_sat_f32_s = 0x04, i64_trunc_sat_f32_u = 0x05, i64_trunc_sat_f64_s = 0x06, i64_trunc_sat_f64_u = 0x07,
+
+    memory_init = 0x08, data_drop  = 0x09, memory_copy = 0x0a, memory_fill = 0x0b,
+    table_init  = 0x0c, elem_drop  = 0x0d, table_copy  = 0x0e,
+    table_grow  = 0x0f, table_size = 0x10, table_fill  = 0x11,
 };
 
 #ifdef WASM_DEBUG
