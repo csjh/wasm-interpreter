@@ -98,7 +98,8 @@ void Validator::validate(uint8_t *&iter, const Signature &signature,
 #define LOAD(type, stacktype)                                                  \
     {                                                                          \
         uint32_t align = 1 << safe_read_leb128<uint32_t>(iter);                \
-        ensure(align <= 8 * sizeof(type), "invalid alignment");                \
+        ensure(align <= sizeof(type),                                          \
+               "alignment must not be larger than natural");                   \
         /* uint32_t offset = */ safe_read_leb128<uint32_t>(iter);              \
         apply({{valtype::i32}, {stacktype}});                                  \
         break;                                                                 \
@@ -107,7 +108,8 @@ void Validator::validate(uint8_t *&iter, const Signature &signature,
 #define STORE(type, stacktype)                                                 \
     {                                                                          \
         uint32_t align = 1 << safe_read_leb128<uint32_t>(iter);                \
-        ensure(align <= 8 * sizeof(type), "invalid alignment");                \
+        ensure(align <= sizeof(type),                                          \
+               "alignment must not be larger than natural");                   \
         /* uint32_t offset = */ safe_read_leb128<uint32_t>(iter);              \
         apply({{valtype::i32, stacktype}, {}});                                \
         break;                                                                 \
@@ -312,6 +314,8 @@ void Validator::validate(uint8_t *&iter, const Signature &signature,
         case globalset: {
             uint32_t global_idx = safe_read_leb128<uint32_t>(iter);
             ensure(global_idx < instance.globals.size(), "unknown global");
+            ensure(instance.globals[global_idx]._mut == mut::var,
+                   "global is immutable");
             valtype global_ty = instance.globals[global_idx].type;
             apply({{global_ty}, {}});
             break;
