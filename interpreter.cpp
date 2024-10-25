@@ -505,6 +505,30 @@ void Instance::interpret(uint8_t *iter) {
         stack[-1] = fn(stack[-1].type, stack[0].type);                         \
         break;                                                                 \
     }
+// todo: am i actually supposed to handle j1/j2 = 2^(n-1)
+#define IDIV(type)                                                             \
+    {                                                                          \
+        stack--;                                                               \
+        if (stack[0].type == 0) {                                              \
+            trap("integer divide by zero");                                    \
+        }                                                                      \
+        using Ty = decltype(stack[-1].type);                                   \
+        if (stack[0].type == static_cast<Ty>(-1) &&                            \
+            stack[-1].type == std::numeric_limits<Ty>::min()) {                \
+            trap("integer overflow");                                   \
+        }                                                                      \
+        stack[-1] = stack[-1].type / stack[0].type;                            \
+        break;                                                                 \
+    }
+#define IREM(type)                                                             \
+    {                                                                          \
+        stack--;                                                               \
+        if (stack[0].type == 0) {                                              \
+            trap("integer divide by zero");                                         \
+        }                                                                      \
+        stack[-1] = stack[-1].type % stack[0].type;                            \
+        break;                                                                 \
+    }
 
 #define LOAD(type)                                                             \
     {                                                                          \
@@ -773,14 +797,14 @@ void Instance::interpret(uint8_t *iter) {
         case i64sub:       BINARY_OP(i64, - );
         case i32mul:       BINARY_OP(i32, * );
         case i64mul:       BINARY_OP(i64, * );
-        case i32div_s:     BINARY_OP(i32, / );
-        case i64div_s:     BINARY_OP(i64, / );
-        case i32div_u:     BINARY_OP(u32, / );
-        case i64div_u:     BINARY_OP(u64, / );
-        case i32rem_s:     BINARY_OP(i32, % );
-        case i64rem_s:     BINARY_OP(i64, % );
-        case i32rem_u:     BINARY_OP(u32, % );
-        case i64rem_u:     BINARY_OP(u64, % );
+        case i32div_s:     IDIV     (i32);
+        case i64div_s:     IDIV     (i64);
+        case i32div_u:     IDIV     (u32);
+        case i64div_u:     IDIV     (u64);
+        case i32rem_s:     IREM     (i32);
+        case i64rem_s:     IREM     (i64);
+        case i32rem_u:     IREM     (u32);
+        case i64rem_u:     IREM     (u64);
         case i32and:       BINARY_OP(u32, & );
         case i64and:       BINARY_OP(u64, & );
         case i32or:        BINARY_OP(u32, | );
