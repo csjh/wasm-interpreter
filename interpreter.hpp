@@ -157,6 +157,13 @@ struct IfJump {
     uint8_t *end;
 };
 
+enum class ImportDesc {
+    func,
+    table,
+    mem,
+    global,
+};
+
 enum class ExportDesc {
     func,
     table,

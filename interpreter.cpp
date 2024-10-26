@@ -30,12 +30,12 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
     uint8_t *iter = bytes.get();
     uint8_t *end = iter + length;
     if (std::strncmp(reinterpret_cast<char *>(iter), "\0asm", 4) != 0) {
-        throw validation_error("invalid magic number");
+        throw malformed_error("invalid magic number");
     }
     iter += 4;
 
     if (*reinterpret_cast<uint32_t *>(iter) != 1) {
-        throw validation_error("invalid version");
+        throw malformed_error("invalid version");
     }
     iter += sizeof(uint32_t);
 
@@ -43,7 +43,12 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
         while (iter != end && *iter == 0) [[unlikely]] {
             ++iter;
             uint32_t section_length = safe_read_leb128<uint32_t>(iter);
-            iter += section_length;
+            uint8_t *start = iter;
+            uint32_t name_length = safe_read_leb128<uint32_t>(iter);
+            if (!is_valid_utf8(iter, iter + name_length)) {
+                throw malformed_error("invalid UTF-8 encoding");
+            }
+            iter = start + section_length;
         }
     };
 
@@ -94,8 +99,52 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
     // todo: import section
     if (iter != end && *iter == 2) {
         ++iter;
-        uint32_t section_length = safe_read_leb128<uint32_t>(iter);
-        iter += section_length;
+        /* uint32_t section_length = */ safe_read_leb128<uint32_t>(iter);
+        uint32_t n_imports = safe_read_leb128<uint32_t>(iter);
+
+        for (uint32_t i = 0; i < n_imports; i++) {
+            uint32_t module_len = safe_read_leb128<uint32_t>(iter);
+            if (!is_valid_utf8(iter, iter + module_len)) {
+                throw malformed_error("invalid UTF-8 encoding");
+            }
+            iter += module_len;
+            uint32_t field_len = safe_read_leb128<uint32_t>(iter);
+            if (!is_valid_utf8(iter, iter + field_len)) {
+                throw malformed_error("invalid UTF-8 encoding");
+            }
+            iter += field_len;
+
+            uint32_t kind = safe_read_leb128<uint32_t>(iter);
+            if (kind == 0) {
+                // func
+                uint32_t typeidx = safe_read_leb128<uint32_t>(iter);
+                if (typeidx >= types.size()) {
+                    throw validation_error("unknown type");
+                }
+            } else if (kind == 1) {
+                // table
+                uint32_t reftype = safe_read_leb128<uint32_t>(iter);
+                if (!is_reftype(reftype)) {
+                    throw validation_error("invalid reftype");
+                }
+                get_limits(iter);
+            } else if (kind == 2) {
+                // mem
+                get_limits(iter);
+            } else if (kind == 3) {
+                // global
+                uint32_t valtype = safe_read_leb128<uint32_t>(iter);
+                if (!is_valtype(valtype) && !is_reftype(valtype)) {
+                    throw malformed_error("invalid global type");
+                }
+                uint8_t mut = *iter++;
+                if (!is_mut(mut)) {
+                    throw malformed_error("invalid mutability");
+                }
+            } else {
+                throw validation_error("invalid import kind");
+            }
+        }
     }
 
     skip_custom_section();
@@ -168,13 +217,13 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
         for (uint32_t i = 0; i < n_globals; ++i) {
             uint8_t maybe_type = *iter++;
             if (!is_valtype(maybe_type)) {
-                throw validation_error("invalid global type");
+                throw malformed_error("invalid global type");
             }
             valtype type = static_cast<valtype>(maybe_type);
 
             uint8_t maybe_mut = *iter++;
             if (!is_mut(maybe_mut)) {
-                throw validation_error("invalid global mutability");
+                throw malformed_error("invalid mutability");
             }
             mut global_mut = static_cast<mut>(maybe_mut);
 
@@ -232,7 +281,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
         elements.reserve(n_elements);
 
         for (uint32_t i = 0; i < n_elements; i++) {
-            uint8_t flags = *iter++;
+            uint32_t flags = safe_read_leb128<uint32_t>(iter);
             if (flags & ~0b111) {
                 throw validation_error("invalid element flags");
             }
@@ -312,11 +361,11 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
                     flags & 0b10 ? safe_read_leb128<uint32_t>(iter) : 0;
 
                 uint32_t offset = interpret_const(iter, valtype::i32).u32;
-                if (offset >= tables[table_idx].size()) {
+                uint32_t n_elements = safe_read_leb128<uint32_t>(iter);
+                if (offset + n_elements > tables[table_idx].size()) {
                     throw validation_error("invalid table offset");
                 }
 
-                uint32_t n_elements = safe_read_leb128<uint32_t>(iter);
                 std::vector<WasmValue> elem{n_elements};
                 if (flags & 0b100) {
                     // flags = 4 or 6
@@ -404,14 +453,14 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
 
     skip_custom_section();
 
-    // todo: data section
+    // data section
     if (iter != end && *iter == 11) {
         ++iter;
         /* uint32_t section_length = */ safe_read_leb128<uint32_t>(iter);
         uint32_t n_data = safe_read_leb128<uint32_t>(iter);
 
         for (uint32_t i = 0; i < n_data; i++) {
-            uint32_t segment_flag = *iter++;
+            uint32_t segment_flag = safe_read_leb128<uint32_t>(iter);
             if (segment_flag & ~0b11) {
                 throw validation_error("invalid data segment flag");
             }
@@ -436,11 +485,13 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
                 // active segment
 
                 uint32_t offset = interpret_const(iter, valtype::i32).u32;
-                if (offset >= memory.size() * WasmMemory::PAGE_SIZE) {
+                uint32_t data_length = safe_read_leb128<uint32_t>(iter);
+
+                if (offset + data_length >
+                    memory.size() * WasmMemory::PAGE_SIZE) {
                     throw validation_error("invalid memory offset");
                 }
 
-                uint32_t data_length = safe_read_leb128<uint32_t>(iter);
                 std::vector<uint8_t> data(data_length);
                 std::memcpy(data.data(), iter, data_length);
                 iter += data_length;
