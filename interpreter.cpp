@@ -1412,6 +1412,8 @@ WasmMemory::~WasmMemory() {
 uint32_t WasmMemory::size() { return current; }
 
 uint32_t WasmMemory::grow(uint32_t delta) {
+    if (delta == 0)
+        return current;
     uint32_t new_current = current + delta;
     if (new_current > maximum) {
         return -1;

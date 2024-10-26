@@ -325,13 +325,13 @@ void Validator::validate(safe_byte_iterator &iter, const Signature &signature,
             break;
         }
         case memorysize: {
-            if (*iter != 0)
+            if (*iter++ != 0)
                 throw malformed_error("zero flag expected");
             apply({{}, {valtype::i32}});
             break;
         }
         case memorygrow: {
-            if (*iter != 0)
+            if (*iter++ != 0)
                 throw malformed_error("zero flag expected");
             apply({{valtype::i32}, {valtype::i32}});
             break;
