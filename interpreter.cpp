@@ -505,7 +505,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
 
     skip_custom_section();
 
-    Validator(*this, data_segments.size()).validate();
+    Validator(*this).validate();
 
     if (start != std::numeric_limits<uint32_t>::max()) {
         execute<void (*)()>(start);
