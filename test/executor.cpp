@@ -230,9 +230,27 @@ int main(int argv, char **argc) {
             delete instance;
             instance = from_file(resolve_relative(filename, m.filename));
         } else if (std::holds_alternative<test_malformed>(t)) {
-            // auto &m = std::get<test_malformed>(t);
-            // malformation is only for wat
-            continue;
+            auto &m = std::get<test_malformed>(t);
+            if (m.filename.ends_with(".wat"))
+                continue;
+            try {
+                delete from_file(resolve_relative(filename, m.filename));
+
+                std::cerr << "Expected malformed error for file: " << m.filename
+                          << std::endl;
+                return 1;
+            } catch (mitey::malformed_error &e) {
+                if (std::string(e.what()) != m.text) {
+                    std::cerr << "Expected malformed error: " << m.text
+                              << " but got: " << e.what() << std::endl;
+                    return 1;
+                }
+            } catch (std::runtime_error &e) {
+                std::cerr << "Expected malformed error error for file: "
+                          << m.filename << " but got: " << e.what()
+                          << std::endl;
+                return 1;
+            }
         } else if (std::holds_alternative<test_return>(t)) {
             auto &m = std::get<test_return>(t);
 

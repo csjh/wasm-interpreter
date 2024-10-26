@@ -5,6 +5,21 @@
 #include <vector>
 
 namespace mitey {
+class malformed_error : public std::runtime_error {
+  public:
+    malformed_error(const std::string &msg) : std::runtime_error(msg) {}
+};
+
+class validation_error : public std::runtime_error {
+  public:
+    validation_error(const std::string &msg) : std::runtime_error(msg) {}
+};
+
+class trap_error : public std::runtime_error {
+  public:
+    trap_error(const std::string &message) : std::runtime_error(message) {}
+};
+
 enum class valtype : uint8_t {
     empty = 0x40,
 

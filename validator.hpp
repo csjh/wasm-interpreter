@@ -1,12 +1,6 @@
 #include "interpreter.hpp"
 
 namespace mitey {
-
-class validation_error : public std::runtime_error {
-  public:
-    validation_error(const std::string &msg) : std::runtime_error(msg) {}
-};
-
 class Validator {
     Instance &instance;
     uint32_t n_data;

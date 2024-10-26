@@ -10,11 +10,6 @@
 #include <vector>
 
 namespace mitey {
-class trap_error : public std::runtime_error {
-  public:
-    trap_error(const std::string &message) : std::runtime_error(message) {}
-};
-
 [[noreturn]] static inline void trap(std::string message) {
     throw trap_error(message);
 }
