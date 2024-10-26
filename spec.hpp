@@ -115,7 +115,8 @@ static inline bool is_valid_utf8(const uint8_t *bytes, const uint8_t *end) {
     return bytes == end;
 }
 
-template <uint8_t BITS> static inline int64_t read_sleb128(uint8_t *&iter) {
+template <uint8_t BITS, typename Iter>
+static inline int64_t read_sleb128(Iter &iter) {
     int64_t result = 0;
     uint64_t shift = 0;
     uint64_t byte;
@@ -130,10 +131,10 @@ template <uint8_t BITS> static inline int64_t read_sleb128(uint8_t *&iter) {
     return result;
 }
 
-template <typename T, uint8_t BITS = sizeof(T) * 8>
-static inline T safe_read_sleb128(uint8_t *&iter) {
+template <typename T, uint8_t BITS = sizeof(T) * 8, typename Iter>
+static inline T safe_read_sleb128(Iter &iter) {
     assert(BITS / 8 <= sizeof(T));
-    uint8_t *start = iter;
+    Iter start = iter;
     int64_t result = read_sleb128<BITS>(iter);
     if (result > static_cast<int64_t>((1ULL << (BITS - 1)) - 1)) {
         throw malformed_error("integer too large");
@@ -151,7 +152,7 @@ static inline T safe_read_sleb128(uint8_t *&iter) {
     return static_cast<T>(result);
 }
 
-static inline uint64_t read_leb128(uint8_t *&iter) {
+template <typename Iter> static inline uint64_t read_leb128(Iter &iter) {
     uint64_t result = 0;
     uint64_t shift = 0;
     uint64_t byte;
@@ -163,9 +164,9 @@ static inline uint64_t read_leb128(uint8_t *&iter) {
     return result;
 }
 
-template <typename T, uint8_t BITS = sizeof(T) * 8>
-static inline T safe_read_leb128(uint8_t *&iter) {
-    uint8_t *start = iter;
+template <typename T, uint8_t BITS = sizeof(T) * 8, typename Iter>
+static inline T safe_read_leb128(Iter &iter) {
+    Iter start = iter;
     uint64_t result = read_leb128(iter);
     if (sizeof(T) != 8 && result > (1ULL << BITS) - 1) {
         throw malformed_error("integer too large");

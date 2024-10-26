@@ -181,6 +181,29 @@ struct Segment {
     std::vector<uint8_t> data;
 };
 
+class safe_byte_iterator {
+    uint8_t *iter;
+    uint8_t *end;
+
+  public:
+    safe_byte_iterator(uint8_t *begin, uint8_t *end);
+
+    uint8_t operator*() const;
+    uint8_t operator[](size_t n) const;
+    safe_byte_iterator &operator++();
+    safe_byte_iterator operator++(int);
+    safe_byte_iterator operator+(size_t n) const;
+    safe_byte_iterator &operator+=(size_t n);
+    ptrdiff_t operator-(safe_byte_iterator other) const;
+    ptrdiff_t operator-(const uint8_t *other) const;
+    bool operator<(safe_byte_iterator other) const;
+    uint8_t *get_with_at_least(size_t n) const;
+    bool empty() const;
+    bool has_n_left(size_t n) const;
+
+    uint8_t *unsafe_ptr() const { return iter; }
+};
+
 template <size_t N> struct string_literal {
     constexpr string_literal(const char (&str)[N]) {
         std::copy_n(str, N, value);
@@ -193,6 +216,8 @@ template <size_t N> string_literal(const char (&)[N]) -> string_literal<N>;
 
 class Instance {
     friend class Validator;
+
+    static constexpr uint32_t MAX_LOCALS = 50000;
 
     Instance(const Instance &) = delete;
     Instance &operator=(const Instance &) = delete;
@@ -228,7 +253,7 @@ class Instance {
     // tables
     std::vector<WasmTable> tables;
 
-    Signature read_blocktype(uint8_t *&iter) {
+    template <typename Iter> Signature read_blocktype(Iter &iter) {
         uint8_t byte = *iter;
         if (byte == static_cast<uint8_t>(valtype::empty)) {
             ++iter;
@@ -247,7 +272,7 @@ class Instance {
     void prepare_to_call(const FunctionInfo &idx, uint8_t *return_to);
     void interpret(uint8_t *iter);
 
-    WasmValue interpret_const(uint8_t *&iter, valtype expected);
+    WasmValue interpret_const(safe_byte_iterator &iter, valtype expected);
 
     template <typename T> void push_arg(T arg);
     template <typename ReturnType> ReturnType pop_result();

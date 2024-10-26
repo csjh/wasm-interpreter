@@ -241,14 +241,13 @@ int main(int argv, char **argc) {
                 return 1;
             } catch (mitey::malformed_error &e) {
                 if (std::string(e.what()) != m.text) {
-                    std::cerr << "Expected malformed error: " << m.text
+                    std::cerr << "Expected error message: " << m.text
                               << " but got: " << e.what() << std::endl;
                     return 1;
                 }
             } catch (std::runtime_error &e) {
-                std::cerr << "Expected malformed error error for file: "
-                          << m.filename << " but got: " << e.what()
-                          << std::endl;
+                std::cerr << "Expected malformed error with message: " << m.text
+                          << " but got: " << e.what() << std::endl;
                 return 1;
             }
         } else if (std::holds_alternative<test_return>(t)) {
@@ -310,14 +309,13 @@ int main(int argv, char **argc) {
                 return 1;
             } catch (mitey::validation_error &e) {
                 if (std::string(e.what()) != m.text) {
-                    std::cerr << "Expected validation error: " << m.text
+                    std::cerr << "Expected error message: " << m.text
                               << " but got: " << e.what() << std::endl;
                     return 1;
                 }
             } catch (std::runtime_error &e) {
-                std::cerr << "Expected validation error for file: "
-                          << m.filename << " but got: " << e.what()
-                          << std::endl;
+                std::cerr << "Expected validation error with message: "
+                          << m.text << " but got: " << e.what() << std::endl;
                 return 1;
             }
         } else if (std::holds_alternative<test_trap>(t)) {

@@ -2,6 +2,7 @@
 #include "spec.hpp"
 #include "validator.hpp"
 #include <algorithm>
+#include <functional>
 #include <iostream>
 #include <limits>
 
@@ -10,7 +11,77 @@
 #endif
 
 namespace mitey {
-std::tuple<uint32_t, uint32_t> get_limits(uint8_t *&iter) {
+safe_byte_iterator::safe_byte_iterator(uint8_t *begin, uint8_t *end)
+    : iter(begin), end(end) {}
+
+uint8_t safe_byte_iterator::operator*() const {
+    if (iter == end) {
+        throw malformed_error("unexpected end");
+    }
+    return *iter;
+}
+
+uint8_t safe_byte_iterator::operator[](size_t n) const {
+    if (iter + n >= end) {
+        throw malformed_error("unexpected end");
+    }
+    return iter[n];
+}
+
+safe_byte_iterator &safe_byte_iterator::operator++() {
+    if (iter == end) {
+        throw malformed_error("unexpected end");
+    }
+    ++iter;
+    return *this;
+}
+
+safe_byte_iterator safe_byte_iterator::operator++(int) {
+    if (iter == end) {
+        throw malformed_error("unexpected end");
+    }
+    return safe_byte_iterator(iter++, end);
+}
+
+safe_byte_iterator safe_byte_iterator::operator+(size_t n) const {
+    if (iter + n > end) {
+        throw malformed_error("unexpected end");
+    }
+    return safe_byte_iterator(iter + n, end);
+}
+
+safe_byte_iterator &safe_byte_iterator::operator+=(size_t n) {
+    if (iter + n > end) {
+        throw malformed_error("unexpected end");
+    }
+    iter += n;
+    return *this;
+}
+
+ptrdiff_t safe_byte_iterator::operator-(safe_byte_iterator other) const {
+    return iter - other.iter;
+}
+
+ptrdiff_t safe_byte_iterator::operator-(const uint8_t *other) const {
+    return iter - other;
+}
+
+bool safe_byte_iterator::operator<(safe_byte_iterator other) const {
+    return iter < other.iter;
+}
+
+uint8_t *safe_byte_iterator::get_with_at_least(size_t n) const {
+    if (!has_n_left(n)) {
+        throw malformed_error("length out of bounds");
+    }
+    return iter;
+}
+
+bool safe_byte_iterator::empty() const { return iter == end; }
+
+bool safe_byte_iterator::has_n_left(size_t n) const { return iter + n <= end; }
+
+std::tuple<uint32_t, uint32_t> get_limits(safe_byte_iterator &iter) {
     uint32_t flags = safe_read_leb128<uint32_t>(iter);
     if (flags != 0 && flags != 1) {
         throw validation_error("invalid flags");
@@ -26,43 +97,81 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
     : bytes(std::move(_bytes)),
       stack(static_cast<WasmValue *>(malloc(stack_size))), stack_start(stack) {
 
-    // todo: use byte iterator or something
-    uint8_t *iter = bytes.get();
-    uint8_t *end = iter + length;
-    if (std::strncmp(reinterpret_cast<char *>(iter), "\0asm", 4) != 0) {
-        throw malformed_error("invalid magic number");
+    if (length < 4) {
+        throw malformed_error("unexpected end");
+    }
+
+    safe_byte_iterator iter(bytes.get(), bytes.get() + length);
+
+    if (std::memcmp(reinterpret_cast<char *>(iter.get_with_at_least(4)),
+                    "\0asm", 4) != 0) {
+        throw malformed_error("magic header not detected");
     }
     iter += 4;
 
-    if (*reinterpret_cast<uint32_t *>(iter) != 1) {
-        throw malformed_error("invalid version");
+    if (length < 8) {
+        throw malformed_error("unexpected end");
+    }
+
+    if (*reinterpret_cast<uint32_t *>(iter.get_with_at_least(4)) != 1) {
+        throw malformed_error("unknown binary version");
     }
     iter += sizeof(uint32_t);
 
     auto skip_custom_section = [&]() {
-        while (iter != end && *iter == 0) [[unlikely]] {
+        while (!iter.empty() && *iter == 0) [[unlikely]] {
             ++iter;
             uint32_t section_length = safe_read_leb128<uint32_t>(iter);
-            uint8_t *start = iter;
+            safe_byte_iterator start = iter;
+
             uint32_t name_length = safe_read_leb128<uint32_t>(iter);
-            if (!is_valid_utf8(iter, iter + name_length)) {
+            if (!is_valid_utf8(iter.get_with_at_least(name_length),
+                               (iter + name_length).unsafe_ptr())) {
                 throw malformed_error("invalid UTF-8 encoding");
             }
+
+            if (start + section_length < iter) {
+                throw malformed_error("unexpected end");
+            }
+
             iter = start + section_length;
+        }
+    };
+
+    auto section = [&](
+                       uint32_t id, std::function<void()> body,
+                       std::function<void()> else_ = [] {}) {
+        if (!iter.empty() && *iter == id) {
+            ++iter;
+            uint32_t section_length = safe_read_leb128<uint32_t>(iter);
+            if (!iter.has_n_left(section_length)) {
+                throw malformed_error("unexpected end of section or function");
+            }
+            safe_byte_iterator section_start = iter;
+
+            body();
+
+            if (iter - section_start != section_length) {
+                throw malformed_error("section size mismatch");
+            }
+        } else {
+            else_();
         }
     };
 
     skip_custom_section();
 
     // type section
-    if (iter != end && *iter == 1) {
-        ++iter;
-        /* uint32_t section_length = */ safe_read_leb128<uint32_t>(iter);
+    section(1, [&] {
         uint32_t n_types = safe_read_leb128<uint32_t>(iter);
 
         types.reserve(n_types);
 
         for (uint32_t i = 0; i < n_types; ++i) {
+            if (iter.empty()) {
+                throw malformed_error("unexpected end of section or function");
+            }
+
             if (*iter != 0x60) {
                 throw validation_error("invalid function type");
             }
@@ -92,24 +201,28 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
 
             types.emplace_back(fn);
         }
-    }
+    });
 
     skip_custom_section();
 
     // todo: import section
-    if (iter != end && *iter == 2) {
-        ++iter;
-        /* uint32_t section_length = */ safe_read_leb128<uint32_t>(iter);
+    section(2, [&] {
         uint32_t n_imports = safe_read_leb128<uint32_t>(iter);
 
         for (uint32_t i = 0; i < n_imports; i++) {
+            if (iter.empty()) {
+                throw malformed_error("unexpected end of section or function");
+            }
+
             uint32_t module_len = safe_read_leb128<uint32_t>(iter);
-            if (!is_valid_utf8(iter, iter + module_len)) {
+            if (!is_valid_utf8(iter.get_with_at_least(module_len),
+                               (iter + module_len).unsafe_ptr())) {
                 throw malformed_error("invalid UTF-8 encoding");
             }
             iter += module_len;
             uint32_t field_len = safe_read_leb128<uint32_t>(iter);
-            if (!is_valid_utf8(iter, iter + field_len)) {
+            if (!is_valid_utf8(iter.get_with_at_least(field_len),
+                               (iter + field_len).unsafe_ptr())) {
                 throw malformed_error("invalid UTF-8 encoding");
             }
             iter += field_len;
@@ -145,38 +258,41 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
                 throw validation_error("invalid import kind");
             }
         }
-    }
+    });
 
     skip_custom_section();
 
     // function type section
-    if (iter != end && *iter == 3) {
-        ++iter;
-        /* uint32_t section_length = */ safe_read_leb128<uint32_t>(iter);
+    section(3, [&] {
         uint32_t n_functions = safe_read_leb128<uint32_t>(iter);
 
         functions.reserve(n_functions);
 
         for (uint32_t i = 0; i < n_functions; ++i) {
+            if (iter.empty()) {
+                throw malformed_error("unexpected end of section or function");
+            }
+
             uint32_t type_idx = safe_read_leb128<uint32_t>(iter);
             if (type_idx >= types.size()) {
                 throw validation_error("unknown type");
             }
             functions.emplace_back(FunctionInfo{nullptr, types[type_idx], {}});
         }
-    }
+    });
 
     skip_custom_section();
 
     // table section
-    if (iter != end && *iter == 4) {
-        ++iter;
-        /* uint32_t section_length = */ safe_read_leb128<uint32_t>(iter);
-
+    section(4, [&] {
         uint32_t n_tables = safe_read_leb128<uint32_t>(iter);
         tables.reserve(n_tables);
 
         for (uint32_t i = 0; i < n_tables; ++i) {
+            if (iter.empty()) {
+                throw malformed_error("unexpected end of section or function");
+            }
+
             uint8_t elem_type = *iter++;
             if (!is_reftype(elem_type)) {
                 throw validation_error("invalid table element type");
@@ -186,35 +302,38 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
             tables.emplace_back(
                 WasmTable{static_cast<valtype>(elem_type), initial, maximum});
         }
-    }
+    });
 
     skip_custom_section();
 
     // memory section
-    if (iter != end && *iter == 5) {
-        ++iter;
-        /* uint32_t section_length = */ safe_read_leb128<uint32_t>(iter);
-
+    section(5, [&] {
         uint32_t n_memories = safe_read_leb128<uint32_t>(iter);
         if (n_memories > 1) {
             throw validation_error("multiple memories");
         } else if (n_memories == 1) {
+            if (iter.empty()) {
+                throw malformed_error("unexpected end of section or function");
+            }
+
             auto [initial, maximum] = get_limits(iter);
             new (&memory) WasmMemory(initial, maximum);
         }
-    }
+    });
 
     skip_custom_section();
 
     // global section
-    if (iter != end && *iter == 6) {
-        ++iter;
-        /* uint32_t section_length = */ safe_read_leb128<uint32_t>(iter);
+    section(6, [&] {
         uint32_t n_globals = safe_read_leb128<uint32_t>(iter);
 
         globals.reserve(n_globals);
 
         for (uint32_t i = 0; i < n_globals; ++i) {
+            if (iter.empty()) {
+                throw malformed_error("unexpected end of section or function");
+            }
+
             uint8_t maybe_type = *iter++;
             if (!is_valtype(maybe_type)) {
                 throw malformed_error("invalid global type");
@@ -230,19 +349,23 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
             globals.emplace_back(
                 WasmGlobal{type, global_mut, interpret_const(iter, type)});
         }
-    }
+    });
 
     skip_custom_section();
 
     // export section
-    if (iter != end && *iter == 7) {
-        ++iter;
-        /* uint32_t section_length = */ safe_read_leb128<uint32_t>(iter);
+    section(7, [&] {
         uint32_t n_exports = safe_read_leb128<uint32_t>(iter);
 
         for (uint32_t i = 0; i < n_exports; ++i) {
+            if (iter.empty()) {
+                throw malformed_error("unexpected end of section or function");
+            }
+
             uint32_t name_len = safe_read_leb128<uint32_t>(iter);
-            std::string name(reinterpret_cast<char *>(iter), name_len);
+            std::string name(
+                reinterpret_cast<char *>(iter.get_with_at_least(name_len)),
+                name_len);
             iter += name_len;
 
             uint8_t desc = *iter++;
@@ -255,32 +378,34 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
 
             exports[name] = {export_desc, idx};
         }
-    }
+    });
 
     skip_custom_section();
 
     // start section
     uint32_t start = std::numeric_limits<uint32_t>::max();
-    if (iter != end && *iter == 8) {
-        ++iter;
-        /* uint32_t section_length = */ safe_read_leb128<uint32_t>(iter);
+    section(8, [&] {
         start = safe_read_leb128<uint32_t>(iter);
         if (start >= functions.size()) {
             throw validation_error("invalid start function");
         }
-    }
+    });
 
     skip_custom_section();
 
     // element section
-    if (iter != end && *iter == 9) {
-        ++iter;
-        /* uint32_t section_length = */ safe_read_leb128<uint32_t>(iter);
+    section(9, [&] {
         uint32_t n_elements = safe_read_leb128<uint32_t>(iter);
 
         elements.reserve(n_elements);
 
         for (uint32_t i = 0; i < n_elements; i++) {
+            /*
+            why is this not needed
+            if (iter.empty()) {
+                throw malformed_error("unexpected end of section or function");
+            }
+            */
             uint32_t flags = safe_read_leb128<uint32_t>(iter);
             if (flags & ~0b111) {
                 throw validation_error("invalid element flags");
@@ -405,61 +530,79 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
                 elements.emplace_back(elem);
             }
         }
-    }
+    });
 
     skip_custom_section();
 
     // data count section
-    if (iter != end && *iter == 12) {
+    section(12, [&] {
         ++iter;
         uint32_t section_length = safe_read_leb128<uint32_t>(iter);
+        if (!iter.has_n_left(section_length)) {
+            throw malformed_error("unexpected end of section or function");
+        }
+
         iter += section_length;
-    }
+    });
 
     skip_custom_section();
 
     // code section
-    if (iter != end && *iter == 10) {
-        ++iter;
-        /* uint32_t section_length = */ safe_read_leb128<uint32_t>(iter);
-        uint32_t n_functions = safe_read_leb128<uint32_t>(iter);
+    section(
+        10,
+        [&] {
+            uint32_t n_functions = safe_read_leb128<uint32_t>(iter);
 
-        if (n_functions != functions.size()) {
-            throw validation_error("function count mismatch");
-        }
-
-        for (FunctionInfo &fn : functions) {
-            fn.locals = fn.type.params;
-
-            uint32_t function_length = safe_read_leb128<uint32_t>(iter);
-            uint8_t *start = iter;
-
-            uint32_t n_local_decls = safe_read_leb128<uint32_t>(iter);
-            while (n_local_decls--) {
-                uint32_t n_locals = safe_read_leb128<uint32_t>(iter);
-                uint8_t type = *iter++;
-                if (!is_valtype(type)) {
-                    throw validation_error("invalid local type");
-                }
-                while (n_locals--) {
-                    fn.locals.push_back(static_cast<valtype>(type));
-                }
+            if (n_functions != functions.size()) {
+                throw malformed_error(
+                    "function and code section have inconsistent lengths");
             }
-            fn.start = iter;
 
-            iter = start + function_length;
-        }
-    }
+            for (FunctionInfo &fn : functions) {
+                fn.locals = fn.type.params;
+
+                uint32_t function_length = safe_read_leb128<uint32_t>(iter);
+
+                safe_byte_iterator start = iter;
+
+                uint32_t n_local_decls = safe_read_leb128<uint32_t>(iter);
+                while (n_local_decls--) {
+                    uint32_t n_locals = safe_read_leb128<uint32_t>(iter);
+                    uint8_t type = *iter++;
+                    if (!is_valtype(type)) {
+                        throw validation_error("invalid local type");
+                    }
+                    while (n_locals--) {
+                        fn.locals.push_back(static_cast<valtype>(type));
+                        if (fn.locals.size() > MAX_LOCALS) {
+                            throw malformed_error("too many locals");
+                        }
+                    }
+                }
+                fn.start =
+                    iter.get_with_at_least(function_length - (iter - start));
+
+                iter = start + function_length;
+            }
+        },
+        [&] {
+            if (functions.size() != 0) {
+                throw malformed_error(
+                    "function and code section have inconsistent lengths");
+            }
+        });
 
     skip_custom_section();
 
     // data section
-    if (iter != end && *iter == 11) {
-        ++iter;
-        /* uint32_t section_length = */ safe_read_leb128<uint32_t>(iter);
+    section(11, [&] {
         uint32_t n_data = safe_read_leb128<uint32_t>(iter);
 
         for (uint32_t i = 0; i < n_data; i++) {
+            if (iter.empty()) {
+                throw malformed_error("unexpected end of section or function");
+            }
+
             uint32_t segment_flag = safe_read_leb128<uint32_t>(iter);
             if (segment_flag & ~0b11) {
                 throw validation_error("invalid data segment flag");
@@ -476,8 +619,13 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
                 // passive segment
 
                 uint32_t data_length = safe_read_leb128<uint32_t>(iter);
+                if (!iter.has_n_left(data_length)) {
+                    throw malformed_error(
+                        "unexpected end of section or function");
+                }
                 std::vector<uint8_t> data(data_length);
-                std::memcpy(data.data(), iter, data_length);
+                std::memcpy(data.data(), iter.get_with_at_least(data_length),
+                            data_length);
                 iter += data_length;
 
                 data_segments.emplace_back(Segment{memidx, std::move(data)});
@@ -491,9 +639,14 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
                     memory.size() * WasmMemory::PAGE_SIZE) {
                     throw validation_error("invalid memory offset");
                 }
+                if (!iter.has_n_left(data_length)) {
+                    throw malformed_error(
+                        "unexpected end of section or function");
+                }
 
                 std::vector<uint8_t> data(data_length);
-                std::memcpy(data.data(), iter, data_length);
+                std::memcpy(data.data(), iter.get_with_at_least(data_length),
+                            data_length);
                 iter += data_length;
 
                 memory.copy_into(offset, data.data(), data_length);
@@ -501,11 +654,15 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
                 data_segments.emplace_back(Segment{memidx, std::move(data)});
             }
         }
-    }
+    });
 
     skip_custom_section();
 
-    Validator(*this).validate();
+    if (!iter.empty()) {
+        throw malformed_error("invalid section id");
+    }
+
+    Validator(*this).validate(bytes.get() + length);
 
     if (start != std::numeric_limits<uint32_t>::max()) {
         execute<void (*)()>(start);
@@ -537,7 +694,8 @@ void Instance::prepare_to_call(const FunctionInfo &fn, uint8_t *return_to) {
 
 // constant expressions (including extended const expression proposal)
 // this shoves validation and execution into one for simplicity(?)
-WasmValue Instance::interpret_const(uint8_t *&iter, valtype expected) {
+WasmValue Instance::interpret_const(safe_byte_iterator &iter,
+                                    valtype expected) {
     std::vector<valtype> stack_types;
 
 #define OP(ty, op)                                                             \
@@ -584,12 +742,14 @@ WasmValue Instance::interpret_const(uint8_t *&iter, valtype expected) {
             stack_types.push_back(valtype::i64);
             break;
         case f32const:
-            *stack++ = *reinterpret_cast<float *>(iter);
+            *stack++ = *reinterpret_cast<float *>(
+                iter.get_with_at_least(sizeof(float)));
             iter += sizeof(float);
             stack_types.push_back(valtype::f32);
             break;
         case f64const:
-            *stack++ = *reinterpret_cast<double *>(iter);
+            *stack++ = *reinterpret_cast<double *>(
+                iter.get_with_at_least(sizeof(double)));
             iter += sizeof(double);
             stack_types.push_back(valtype::f64);
             break;

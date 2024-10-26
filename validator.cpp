@@ -1,4 +1,5 @@
 #include "validator.hpp"
+#include "interpreter.hpp"
 #include "spec.hpp"
 
 namespace mitey {
@@ -11,12 +12,12 @@ static inline void _ensure(bool condition, const std::string &msg) {
 
 #define ensure(condition, msg) _ensure(condition, msg)
 
-void Validator::validate() {
+void Validator::validate(uint8_t *end) {
     for (const auto &fn : instance.functions) {
         current_fn = fn;
         control_stack.push_back(fn.type.results);
 
-        uint8_t *iter = fn.start;
+        safe_byte_iterator iter(fn.start, end);
         validate(iter, fn.type, true);
 
         ensure(control_stack.size() == 1,
@@ -75,7 +76,7 @@ class WasmStack : protected std::vector<valtype> {
     }
 };
 
-void Validator::validate(uint8_t *&iter, const Signature &signature,
+void Validator::validate(safe_byte_iterator &iter, const Signature &signature,
                          bool is_func) {
     WasmStack stack;
     if (!is_func) {
@@ -144,13 +145,13 @@ void Validator::validate(uint8_t *&iter, const Signature &signature,
 
             stack.pop(signature.params);
 
-            uint8_t *block_start = iter;
+            uint8_t *block_start = iter.unsafe_ptr();
 
             control_stack.push_back(signature.results);
             validate(iter, signature);
             control_stack.pop_back();
 
-            instance.block_ends[block_start] = iter;
+            instance.block_ends[block_start] = iter.unsafe_ptr();
 
             stack.push(signature.results);
             break;
@@ -174,11 +175,11 @@ void Validator::validate(uint8_t *&iter, const Signature &signature,
 
             stack.pop(signature.params);
 
-            uint8_t *if_start = iter;
+            uint8_t *if_start = iter.unsafe_ptr();
 
             control_stack.push_back(signature.results);
             validate(iter, signature);
-            uint8_t *else_start = iter;
+            uint8_t *else_start = iter.unsafe_ptr();
             // validate else branch if previous instruction was else
             if (iter[-1] == static_cast<uint8_t>(else_)) {
                 validate(iter, signature);
@@ -191,7 +192,7 @@ void Validator::validate(uint8_t *&iter, const Signature &signature,
             }
             control_stack.pop_back();
 
-            instance.if_jumps[if_start] = {else_start, iter};
+            instance.if_jumps[if_start] = {else_start, iter.unsafe_ptr()};
             break;
         }
         // else is basically an end to an if
@@ -248,6 +249,9 @@ void Validator::validate(uint8_t *&iter, const Signature &signature,
             uint32_t type_idx = safe_read_leb128<uint32_t>(iter);
             ensure(type_idx < instance.types.size(), "invalid type index");
 
+            // todo: remove with multiple tables stuff
+            if (*iter != 0)
+                throw malformed_error("zero flag expected");
             uint32_t table_idx = safe_read_leb128<uint32_t>(iter);
             ensure(table_idx < instance.tables.size(), "invalid table index");
             ensure(instance.tables[table_idx].type == valtype::funcref,
@@ -321,14 +325,14 @@ void Validator::validate(uint8_t *&iter, const Signature &signature,
             break;
         }
         case memorysize: {
-            uint32_t mem_idx = safe_read_leb128<uint32_t>(iter);
-            ensure(mem_idx == 0, "invalid memory index");
+            if (*iter != 0)
+                throw malformed_error("zero flag expected");
             apply({{}, {valtype::i32}});
             break;
         }
         case memorygrow: {
-            uint32_t mem_idx = safe_read_leb128<uint32_t>(iter);
-            ensure(mem_idx == 0, "invalid memory index");
+            if (*iter != 0)
+                throw malformed_error("zero flag expected");
             apply({{valtype::i32}, {valtype::i32}});
             break;
         }

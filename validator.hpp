@@ -6,13 +6,13 @@ class Validator {
     FunctionInfo current_fn;
     std::vector<std::vector<valtype>> control_stack;
 
-    void validate(uint8_t *&iter, const Signature &signature,
+    void validate(safe_byte_iterator &iter, const Signature &signature,
                   bool is_func = false);
 
   public:
     Validator(Instance &instance) : instance(instance) {}
 
-    void validate();
+    void validate(uint8_t *end);
 };
 
 } // namespace mitey
