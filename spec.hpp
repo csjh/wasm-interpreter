@@ -74,21 +74,30 @@ template <uint8_t BITS> static inline int64_t read_sleb128(uint8_t *&iter) {
         result |= (byte & 0x7f) << shift;
         shift += 7;
     } while (byte & 0x80);
-    if (shift < BITS && (byte & 0x40)) {
-        result |= -1 << shift;
+    if (shift < 64 && (byte & 0x40)) {
+        result |= static_cast<int64_t>(-1) << shift;
     }
-    // sign extend
-    result <<= 64 - BITS;
-    result >>= 64 - BITS;
     return result;
 }
 
 template <typename T, uint8_t BITS = sizeof(T) * 8>
 static inline T safe_read_sleb128(uint8_t *&iter) {
     assert(BITS / 8 <= sizeof(T));
+    uint8_t *start = iter;
     int64_t result = read_sleb128<BITS>(iter);
-    assert(result <= static_cast<int64_t>((1ULL << (BITS - 1)) - 1));
-    assert(result >= static_cast<int64_t>(-(1ULL << (BITS - 1))));
+    if (result > static_cast<int64_t>((1ULL << (BITS - 1)) - 1)) {
+        throw malformed_error("integer too large");
+    }
+    if (result < static_cast<int64_t>(-(1ULL << (BITS - 1)))) {
+        throw malformed_error("integer too large");
+    }
+    if (static_cast<uint64_t>(iter - start) >
+        static_cast<uint64_t>(1 + BITS / 7)) {
+        throw malformed_error("integer representation too long");
+    }
+    if (((iter[-1] != 0 && iter[-1] != 127) + (iter - start - 1) * 7) >= BITS) {
+        throw malformed_error("integer too large");
+    }
     return static_cast<T>(result);
 }
 
@@ -104,11 +113,21 @@ static inline uint64_t read_leb128(uint8_t *&iter) {
     return result;
 }
 
-template <typename T>
-static inline T safe_read_leb128(uint8_t *&iter, uint8_t bits = sizeof(T) * 8) {
-    assert(bits / 8 <= sizeof(T));
+template <typename T, uint8_t BITS = sizeof(T) * 8>
+static inline T safe_read_leb128(uint8_t *&iter) {
+    uint8_t *start = iter;
     uint64_t result = read_leb128(iter);
-    assert(bits == 64 || result <= (1ULL << bits) - 1);
+    if (sizeof(T) != 8 && result > (1ULL << BITS) - 1) {
+        throw malformed_error("integer too large");
+    }
+    if (static_cast<uint64_t>(iter - start) >
+        static_cast<uint64_t>(1 + BITS / 7)) {
+        throw malformed_error("integer representation too long");
+    }
+    if ((8 - std::countl_zero(static_cast<uint8_t>(iter[-1] & 0x7f)) +
+         (iter - start - 1) * 7) > BITS) {
+        throw malformed_error("integer too large");
+    }
     return static_cast<T>(result);
 }
 
