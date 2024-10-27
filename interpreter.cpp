@@ -855,11 +855,20 @@ void Instance::interpret(uint8_t *iter) {
 #define UNARY_OP(type, op)                                                     \
     stack[-1] = op(stack[-1].type);                                            \
     break
-#define TRUNC(type, op)                                                        \
-    if (!std::isfinite(stack[-1].type)) {                                      \
-        trap("invalid conversion to integer");                                 \
-    }                                                                          \
-    UNARY_OP(type, op)
+#define TRUNC(type, op, lower, upper)                                          \
+    {                                                                          \
+        if (!std::isfinite(stack[-1].type)) {                                  \
+            if (isnan(stack[-1].type)) {                                       \
+                trap("invalid conversion to integer");                         \
+            } else {                                                           \
+                trap("integer overflow");                                      \
+            }                                                                  \
+        }                                                                      \
+        if (stack[-1].type <= lower || upper <= stack[-1].type) {              \
+            trap("integer overflow");                                          \
+        }                                                                      \
+        UNARY_OP(type, op);                                                    \
+    }
 #define UNARY_FN(type, fn)                                                     \
     stack[-1] = fn(stack[-1].type);                                            \
     break
@@ -1237,14 +1246,14 @@ void Instance::interpret(uint8_t *iter) {
         case i32wrap_i64:      UNARY_OP(i64, (int32_t));
         case i64extend_i32_s:  UNARY_OP(i32, (int64_t));
         case i64extend_i32_u:  UNARY_OP(u32, (uint64_t));
-        case i32trunc_f32_s:   TRUNC   (f32, (int32_t));
-        case i64trunc_f32_s:   TRUNC   (f32, (int64_t));
-        case i32trunc_f32_u:   TRUNC   (f32, (uint32_t));
-        case i64trunc_f32_u:   TRUNC   (f32, (uint64_t));
-        case i32trunc_f64_s:   TRUNC   (f64, (int32_t));
-        case i64trunc_f64_s:   TRUNC   (f64, (int64_t));
-        case i32trunc_f64_u:   TRUNC   (f64, (uint32_t));
-        case i64trunc_f64_u:   TRUNC   (f64, (uint64_t));
+        case i32trunc_f32_s:   TRUNC   (f32, (int32_t),           -2147483777.,           2147483648.);
+        case i64trunc_f32_s:   TRUNC   (f32, (int64_t),  -9223373136366404000.,  9223372036854776000.);
+        case i32trunc_f32_u:   TRUNC   (f32, (uint32_t),                   -1.,           4294967296.);
+        case i64trunc_f32_u:   TRUNC   (f32, (uint64_t),                   -1., 18446744073709552000.);
+        case i32trunc_f64_s:   TRUNC   (f64, (int32_t),           -2147483649.,           2147483648.);
+        case i64trunc_f64_s:   TRUNC   (f64, (int64_t),  -9223372036854777856.,  9223372036854776000.);
+        case i32trunc_f64_u:   TRUNC   (f64, (uint32_t),                   -1.,           4294967296.);
+        case i64trunc_f64_u:   TRUNC   (f64, (uint64_t),                   -1., 18446744073709552000.);
         case f32convert_i32_s: UNARY_OP(i32, (float));
         case f64convert_i32_s: UNARY_OP(i32, (double));
         case f32convert_i32_u: UNARY_OP(u32, (float));
