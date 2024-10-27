@@ -890,7 +890,8 @@ void Instance::interpret(uint8_t *iter) {
         if (stack[0].type == 0) {                                              \
             trap("integer divide by zero");                                    \
         }                                                                      \
-        if (stack[0].type == static_cast<type>(-1) &&                          \
+        if (std::is_signed_v<type> &&                                          \
+            stack[0].type == static_cast<type>(-1) &&                          \
             stack[-1].type == std::numeric_limits<type>::min()) {              \
             trap("integer overflow");                                          \
         }                                                                      \
