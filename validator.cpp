@@ -247,13 +247,13 @@ void Validator::validate(safe_byte_iterator &iter, const Signature &signature,
             stack.pop(valtype::i32);
 
             uint32_t type_idx = safe_read_leb128<uint32_t>(iter);
-            ensure(type_idx < instance.types.size(), "invalid type index");
+            ensure(type_idx < instance.types.size(), "unknown type");
 
             // todo: remove with multiple tables stuff
             if (*iter != 0)
                 throw malformed_error("zero flag expected");
             uint32_t table_idx = safe_read_leb128<uint32_t>(iter);
-            ensure(table_idx < instance.tables.size(), "invalid table index");
+            ensure(table_idx < instance.tables.size(), "unknown table");
             ensure(instance.tables[table_idx].type == valtype::funcref,
                    "invalid table type for call_indirect");
 
@@ -296,14 +296,14 @@ void Validator::validate(safe_byte_iterator &iter, const Signature &signature,
         }
         case tableget: {
             uint32_t table_idx = safe_read_leb128<uint32_t>(iter);
-            ensure(table_idx < instance.tables.size(), "invalid table index");
+            ensure(table_idx < instance.tables.size(), "unknown table");
             valtype table_ty = instance.tables[table_idx].type;
             apply({{valtype::i32}, {table_ty}});
             break;
         }
         case tableset: {
             uint32_t table_idx = safe_read_leb128<uint32_t>(iter);
-            ensure(table_idx < instance.tables.size(), "invalid table index");
+            ensure(table_idx < instance.tables.size(), "unknown table");
             valtype table_ty = instance.tables[table_idx].type;
             apply({{valtype::i32, table_ty}, {}});
             break;
@@ -557,7 +557,7 @@ void Validator::validate(safe_byte_iterator &iter, const Signature &signature,
                 }
                 case table_init: {
                     uint32_t table_idx = safe_read_leb128<uint32_t>(iter);
-                    ensure(table_idx < instance.tables.size(), "invalid table index");
+                    ensure(table_idx < instance.tables.size(), "unknown table");
                     uint32_t seg_idx = safe_read_leb128<uint32_t>(iter);
                     ensure(seg_idx < instance.elements.size(), "invalid segment index");
 
@@ -571,30 +571,30 @@ void Validator::validate(safe_byte_iterator &iter, const Signature &signature,
                 }
                 case table_copy: {
                     uint32_t src_table_idx = safe_read_leb128<uint32_t>(iter);
-                    ensure(src_table_idx < instance.tables.size(), "invalid table index");
+                    ensure(src_table_idx < instance.tables.size(), "unknown table");
                     uint32_t dst_table_idx = safe_read_leb128<uint32_t>(iter);
-                    ensure(dst_table_idx < instance.tables.size(), "invalid table index");
+                    ensure(dst_table_idx < instance.tables.size(), "unknown table");
 
                     apply({{valtype::i32, valtype::i32, valtype::i32}, {}});
                     break;
                 }
                 case table_grow: {
                     uint32_t table_idx = safe_read_leb128<uint32_t>(iter);
-                    ensure(table_idx < instance.tables.size(), "invalid table index");
+                    ensure(table_idx < instance.tables.size(), "unknown table");
 
                     apply({{instance.tables[table_idx].type, valtype::i32}, {valtype::i32}});
                     break;
                 }
                 case table_size: {
                     uint32_t table_idx = safe_read_leb128<uint32_t>(iter);
-                    ensure(table_idx < instance.tables.size(), "invalid table index");
+                    ensure(table_idx < instance.tables.size(), "unknown table");
 
                     apply({{}, {valtype::i32}});
                     break;
                 }
                 case table_fill: {
                     uint32_t table_idx = safe_read_leb128<uint32_t>(iter);
-                    ensure(table_idx < instance.tables.size(), "invalid table index");
+                    ensure(table_idx < instance.tables.size(), "unknown table");
 
                     apply({{valtype::i32, instance.tables[table_idx].type, valtype::i32}, {}});
                     break;
