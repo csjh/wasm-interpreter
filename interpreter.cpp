@@ -81,6 +81,25 @@ bool safe_byte_iterator::empty() const { return iter == end; }
 
 bool safe_byte_iterator::has_n_left(size_t n) const { return iter + n <= end; }
 
+struct SignatureHasher {
+    size_t operator()(const Signature &sig) const {
+        size_t hash = 0;
+        for (valtype param : sig.params) {
+            hash ^= std::hash<uint8_t>{}(static_cast<uint8_t>(param));
+        }
+        for (valtype result : sig.results) {
+            hash ^= std::hash<uint8_t>{}(static_cast<uint8_t>(result));
+        }
+        return hash;
+    }
+};
+
+struct SignatureEquality {
+    bool operator()(const Signature &lhs, const Signature &rhs) const {
+        return lhs.params == rhs.params && lhs.results == rhs.results;
+    }
+};
+
 std::tuple<uint32_t, uint32_t> get_limits(safe_byte_iterator &iter) {
     uint32_t flags = safe_read_leb128<uint32_t>(iter);
     if (flags != 0 && flags != 1) {
@@ -163,6 +182,10 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
 
     // type section
     section(1, [&] {
+        std::unordered_map<Signature, uint32_t, SignatureHasher,
+                           SignatureEquality>
+            deduplicator;
+
         uint32_t n_types = safe_read_leb128<uint32_t>(iter);
 
         types.reserve(n_types);
@@ -190,6 +213,10 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
             iter += n_params;
 
             uint32_t n_results = safe_read_leb128<uint32_t>(iter);
+            // todo: change this with multivalue proposal
+            if (n_results > 1) {
+                throw validation_error("invalid result arity");
+            }
             fn.results.reserve(n_results);
             for (uint32_t j = 0; j < n_results; ++j) {
                 if (!is_valtype(iter[j])) {
@@ -199,7 +226,17 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
             }
             iter += n_results;
 
+            if (deduplicator.contains(fn)) {
+                fn.typeidx = deduplicator[fn];
+            } else {
+                deduplicator[fn] = fn.typeidx;
+            }
+
             types.emplace_back(fn);
+        }
+
+        for (FunctionInfo &fn : functions) {
+            fn.type = types[fn.type.typeidx];
         }
     });
 
@@ -376,6 +413,9 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
 
             uint32_t idx = safe_read_leb128<uint32_t>(iter);
 
+            if (exports.contains(name)) {
+                throw validation_error("duplicate export name");
+            }
             exports[name] = {export_desc, idx};
         }
     });
@@ -1057,7 +1097,7 @@ void Instance::interpret(uint8_t *iter) {
             if (!funcref.nonnull) {
                 trap("indirect call to null");
             }
-            if (funcref.typeidx != type_idx) {
+            if (funcref.typeidx != types[type_idx].typeidx) {
                 trap("indirect call type mismatch");
             }
             FunctionInfo &fn = functions[funcref.funcidx];
