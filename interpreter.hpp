@@ -227,7 +227,7 @@ class Instance {
     // source bytes
     std::unique_ptr<uint8_t, void (*)(uint8_t *)> bytes;
     // WebAssembly.Memory
-    WasmMemory memory;
+    std::shared_ptr<WasmMemory> memory;
     // internal stack
     WasmValue *stack;
     // function-specific frames
@@ -239,7 +239,7 @@ class Instance {
     // locations of block end instructions
     std::unordered_map<uint8_t *, uint8_t *> block_ends;
     // value of globals
-    std::vector<WasmGlobal> globals;
+    std::vector<std::shared_ptr<WasmGlobal>> globals;
     // maps element indices to the element initializers
     std::vector<std::vector<WasmValue>> elements;
     // types from type section
@@ -251,7 +251,7 @@ class Instance {
     // data segments
     std::vector<Segment> data_segments;
     // tables
-    std::vector<WasmTable> tables;
+    std::vector<std::shared_ptr<WasmTable>> tables;
 
     template <typename Iter> Signature read_blocktype(Iter &iter) {
         uint8_t byte = *iter;
@@ -288,7 +288,7 @@ class Instance {
 
   public:
     Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> bytes,
-             uint32_t length);
+             uint32_t length, const Imports &imports = {});
 
     ~Instance();
 

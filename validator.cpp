@@ -254,7 +254,7 @@ void Validator::validate(safe_byte_iterator &iter, const Signature &signature,
                 throw malformed_error("zero flag expected");
             uint32_t table_idx = safe_read_leb128<uint32_t>(iter);
             ensure(table_idx < instance.tables.size(), "unknown table");
-            ensure(instance.tables[table_idx].type == valtype::funcref,
+            ensure(instance.tables[table_idx]->type == valtype::funcref,
                    "invalid table type for call_indirect");
 
             apply(instance.types[type_idx]);
@@ -297,30 +297,30 @@ void Validator::validate(safe_byte_iterator &iter, const Signature &signature,
         case tableget: {
             uint32_t table_idx = safe_read_leb128<uint32_t>(iter);
             ensure(table_idx < instance.tables.size(), "unknown table");
-            valtype table_ty = instance.tables[table_idx].type;
+            valtype table_ty = instance.tables[table_idx]->type;
             apply({{valtype::i32}, {table_ty}});
             break;
         }
         case tableset: {
             uint32_t table_idx = safe_read_leb128<uint32_t>(iter);
             ensure(table_idx < instance.tables.size(), "unknown table");
-            valtype table_ty = instance.tables[table_idx].type;
+            valtype table_ty = instance.tables[table_idx]->type;
             apply({{valtype::i32, table_ty}, {}});
             break;
         }
         case globalget: {
             uint32_t global_idx = safe_read_leb128<uint32_t>(iter);
             ensure(global_idx < instance.globals.size(), "unknown global");
-            valtype global_ty = instance.globals[global_idx].type;
+            valtype global_ty = instance.globals[global_idx]->type;
             apply({{}, {global_ty}});
             break;
         }
         case globalset: {
             uint32_t global_idx = safe_read_leb128<uint32_t>(iter);
             ensure(global_idx < instance.globals.size(), "unknown global");
-            ensure(instance.globals[global_idx]._mut == mut::var,
+            ensure(instance.globals[global_idx]->_mut == mut::var,
                    "global is immutable");
-            valtype global_ty = instance.globals[global_idx].type;
+            valtype global_ty = instance.globals[global_idx]->type;
             apply({{global_ty}, {}});
             break;
         }
@@ -531,7 +531,7 @@ void Validator::validate(safe_byte_iterator &iter, const Signature &signature,
             using enum FCInstruction;
             switch (static_cast<FCInstruction>(byte)) {
                 case memory_init: {
-                    ensure(instance.memory.size() > 0, "no memory");
+                    ensure(instance.memory->size() > 0, "no memory");
                     uint32_t seg_idx = safe_read_leb128<uint32_t>(iter);
                     ensure(seg_idx < instance.data_segments.size(), "invalid segment index");
 
@@ -544,13 +544,13 @@ void Validator::validate(safe_byte_iterator &iter, const Signature &signature,
                     break;
                 }
                 case memory_copy: {
-                    ensure(instance.memory.size() > 0, "no memory");
+                    ensure(instance.memory->size() > 0, "no memory");
 
                     apply({{valtype::i32, valtype::i32, valtype::i32}, {}});
                     break;
                 }
                 case memory_fill: {
-                    ensure(instance.memory.size() > 0, "no memory");
+                    ensure(instance.memory->size() > 0, "no memory");
 
                     apply({{valtype::i32, valtype::i32, valtype::i32}, {}});
                     break;
@@ -582,7 +582,7 @@ void Validator::validate(safe_byte_iterator &iter, const Signature &signature,
                     uint32_t table_idx = safe_read_leb128<uint32_t>(iter);
                     ensure(table_idx < instance.tables.size(), "unknown table");
 
-                    apply({{instance.tables[table_idx].type, valtype::i32}, {valtype::i32}});
+                    apply({{instance.tables[table_idx]->type, valtype::i32}, {valtype::i32}});
                     break;
                 }
                 case table_size: {
@@ -596,7 +596,7 @@ void Validator::validate(safe_byte_iterator &iter, const Signature &signature,
                     uint32_t table_idx = safe_read_leb128<uint32_t>(iter);
                     ensure(table_idx < instance.tables.size(), "unknown table");
 
-                    apply({{valtype::i32, instance.tables[table_idx].type, valtype::i32}, {}});
+                    apply({{valtype::i32, instance.tables[table_idx]->type, valtype::i32}, {}});
                     break;
                 }
                 default: ensure(false, "unimplemented FC extension instruction");

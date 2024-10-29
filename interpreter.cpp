@@ -112,7 +112,7 @@ std::tuple<uint32_t, uint32_t> get_limits(safe_byte_iterator &iter) {
 }
 
 Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
-                   uint32_t length)
+                   uint32_t length, const Imports &imports)
     : bytes(std::move(_bytes)),
       stack(static_cast<WasmValue *>(malloc(stack_size))), stack_start(stack) {
 
@@ -336,8 +336,8 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
             }
 
             auto [initial, maximum] = get_limits(iter);
-            tables.emplace_back(
-                WasmTable{static_cast<valtype>(elem_type), initial, maximum});
+            tables.emplace_back(std::make_shared<WasmTable>(
+                static_cast<valtype>(elem_type), initial, maximum));
         }
     });
 
@@ -352,9 +352,12 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
             if (iter.empty()) {
                 throw malformed_error("unexpected end of section or function");
             }
+            if (memory) {
+                throw validation_error("multiple memories");
+            }
 
             auto [initial, maximum] = get_limits(iter);
-            new (&memory) WasmMemory(initial, maximum);
+            memory = std::make_shared<WasmMemory>(initial, maximum);
         }
     });
 
@@ -383,8 +386,8 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
             }
             mut global_mut = static_cast<mut>(maybe_mut);
 
-            globals.emplace_back(
-                WasmGlobal{type, global_mut, interpret_const(iter, type)});
+            globals.push_back(std::make_shared<WasmGlobal>(
+                type, global_mut, interpret_const(iter, type)));
         }
     });
 
@@ -527,7 +530,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
 
                 uint32_t offset = interpret_const(iter, valtype::i32).u32;
                 uint32_t n_elements = safe_read_leb128<uint32_t>(iter);
-                if (offset + n_elements > tables[table_idx].size()) {
+                if (offset + n_elements > tables[table_idx]->size()) {
                     throw validation_error("invalid table offset");
                 }
 
@@ -545,7 +548,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
                         WasmValue el = interpret_const(
                             iter, static_cast<valtype>(reftype));
                         elem.push_back(el);
-                        tables[table_idx].set(offset + j, el);
+                        tables[table_idx]->set(offset + j, el);
                     }
                 } else {
                     if (flags & 0b10) {
@@ -564,7 +567,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
                         WasmValue funcref = Funcref{
                             functions[elem_idx].type.typeidx, true, elem_idx};
                         elem.push_back(funcref);
-                        tables[table_idx].set(offset + j, funcref);
+                        tables[table_idx]->set(offset + j, funcref);
                     }
                 }
                 elements.emplace_back(elem);
@@ -676,7 +679,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
                 uint32_t data_length = safe_read_leb128<uint32_t>(iter);
 
                 if (offset + data_length >
-                    memory.size() * WasmMemory::PAGE_SIZE) {
+                    memory->size() * WasmMemory::PAGE_SIZE) {
                     throw validation_error("invalid memory offset");
                 }
                 if (!iter.has_n_left(data_length)) {
@@ -689,7 +692,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
                             data_length);
                 iter += data_length;
 
-                memory.copy_into(offset, data.data(), data_length);
+                memory->copy_into(offset, data.data(), data_length);
 
                 data_segments.emplace_back(Segment{memidx, std::move(data)});
             }
@@ -798,8 +801,8 @@ WasmValue Instance::interpret_const(safe_byte_iterator &iter,
             if (global_idx >= globals.size()) {
                 throw validation_error("unknown global");
             }
-            *stack++ = globals[global_idx].value;
-            stack_types.push_back(globals[global_idx].type);
+            *stack++ = globals[global_idx]->value;
+            stack_types.push_back(globals[global_idx]->type);
             break;
         }
         case i32add:
@@ -968,7 +971,7 @@ void Instance::interpret(uint8_t *iter) {
     {                                                                          \
         uint32_t align = 1 << *iter++;                                         \
         uint32_t offset = read_leb128(iter);                                   \
-        stack[-1].type = memory.load<memtype>(stack[-1].u32, offset, align);   \
+        stack[-1].type = memory->load<memtype>(stack[-1].u32, offset, align);  \
         break;                                                                 \
     }
 
@@ -977,8 +980,8 @@ void Instance::interpret(uint8_t *iter) {
         stack -= 2;                                                            \
         uint32_t align = 1 << *iter++;                                         \
         uint32_t offset = read_leb128(iter);                                   \
-        memory.store<type>(stack[0].u32, offset, align,                        \
-                           static_cast<type>(stack[1].stacktype));             \
+        memory->store<type>(stack[0].u32, offset, align,                       \
+                            static_cast<type>(stack[1].stacktype));            \
         break;                                                                 \
     }
 
@@ -1085,7 +1088,13 @@ void Instance::interpret(uint8_t *iter) {
         case call: {
             FunctionInfo &fn = functions[read_leb128(iter)];
             prepare_to_call(fn, iter);
-            iter = fn.start;
+            if (fn.start == nullptr) {
+                // host function
+                fn.fn();
+            } else {
+                // wasm function
+                iter = fn.start;
+            }
             break;
         }
         case call_indirect: {
@@ -1093,7 +1102,7 @@ void Instance::interpret(uint8_t *iter) {
             uint32_t table_idx = read_leb128(iter);
             uint32_t elem_idx = pop().u32;
 
-            Funcref funcref = tables[table_idx].get(elem_idx);
+            Funcref funcref = tables[table_idx]->get(elem_idx);
             if (!funcref.nonnull) {
                 trap("indirect call to null");
             }
@@ -1102,7 +1111,13 @@ void Instance::interpret(uint8_t *iter) {
             }
             FunctionInfo &fn = functions[funcref.funcidx];
             prepare_to_call(fn, iter);
-            iter = fn.start;
+            if (fn.start == nullptr) {
+                // host function
+                fn.fn();
+            } else {
+                // wasm function
+                iter = fn.start;
+            }
             break;
         }
         case drop:
@@ -1124,25 +1139,25 @@ void Instance::interpret(uint8_t *iter) {
             frame().locals[read_leb128(iter)] = stack[-1];
             break;
         case tableget:
-            push(tables[read_leb128(iter)].get(pop().u32));
+            push(tables[read_leb128(iter)]->get(pop().u32));
             break;
         case tableset:
-            tables[read_leb128(iter)].set(pop().u32, pop());
+            tables[read_leb128(iter)]->set(pop().u32, pop());
             break;
         case globalget:
-            push(globals[read_leb128(iter)].value);
+            push(globals[read_leb128(iter)]->value);
             break;
         case globalset:
-            globals[read_leb128(iter)].value = pop();
+            globals[read_leb128(iter)]->value = pop();
             break;
         case memorysize: {
             /* uint32_t mem_idx = */ read_leb128(iter);
-            push(memory.size());
+            push(memory->size());
             break;
         }
         case memorygrow: {
             /* uint32_t mem_idx = */ read_leb128(iter);
-            stack[-1].u32 = memory.grow(stack[-1].u32);
+            stack[-1].u32 = memory->grow(stack[-1].u32);
             break;
         }
         case i32const:
@@ -1344,13 +1359,13 @@ void Instance::interpret(uint8_t *iter) {
                     uint32_t size = pop().u32;
                     uint32_t offset = pop().u32;
                     uint32_t dest = pop().u32;
-                    if (dest + size > memory.size() * WasmMemory::PAGE_SIZE) {
+                    if (dest + size > memory->size() * WasmMemory::PAGE_SIZE) {
                         trap("out of bounds memory access");
                     }
                     if (offset + size > data_segments[seg_idx].data.size()) {
                         trap("offset outside of data segment");
                     }
-                    memory.copy_into(dest, data_segments[seg_idx].data.data() + offset, size);
+                    memory->copy_into(dest, data_segments[seg_idx].data.data() + offset, size);
                     break;
                 }
                 case data_drop: {
@@ -1362,14 +1377,14 @@ void Instance::interpret(uint8_t *iter) {
                     uint32_t src = pop().u32;
                     uint32_t dst = pop().u32;
                     uint32_t size = pop().u32;
-                    memory.memcpy(dst, src, size);
+                    memory->memcpy(dst, src, size);
                     break;
                 }
                 case memory_fill: {
                     uint32_t value = pop().u32;
                     uint32_t ptr = pop().u32;
                     uint32_t size = pop().u32;
-                    memory.memset(ptr, value, size);
+                    memory->memset(ptr, value, size);
                     break;
                 }
                 case table_init: {
@@ -1379,8 +1394,8 @@ void Instance::interpret(uint8_t *iter) {
                     uint32_t offset = pop().u32;
                     uint32_t dest = pop().u32;
 
-                    WasmTable& table = tables[table_idx];
-                    if (dest + size > table.size()) {
+                    auto& table = tables[table_idx];
+                    if (dest + size > table->size()) {
                         trap("out of bounds memory access");
                     }
 
@@ -1389,7 +1404,7 @@ void Instance::interpret(uint8_t *iter) {
                         trap("offset outside of data segment");
                     }
 
-                    table.copy_into(dest, element.data() + offset, size);
+                    table->copy_into(dest, element.data() + offset, size);
                     break;
                 }
                 case elem_drop: {
@@ -1401,19 +1416,19 @@ void Instance::interpret(uint8_t *iter) {
                     uint32_t src = pop().u32;
                     uint32_t dst = pop().u32;
                     uint32_t size = pop().u32;
-                    tables[dst].memcpy(dst, src, size);
+                    tables[dst]->memcpy(dst, src, size);
                     break;
                 }
                 case table_grow: {
                     uint32_t table_idx = read_leb128(iter);
                     WasmValue init = pop();
                     uint32_t delta = pop().u32;
-                    stack[-1].u32 = tables[table_idx].grow(delta, init);
+                    stack[-1].u32 = tables[table_idx]->grow(delta, init);
                     break;
                 }
                 case table_size: {
                     uint32_t table_idx = read_leb128(iter);
-                    push(tables[table_idx].size());
+                    push(tables[table_idx]->size());
                     break;
                 }
                 case table_fill: {
@@ -1421,7 +1436,7 @@ void Instance::interpret(uint8_t *iter) {
                     uint32_t ptr = pop().u32;
                     uint32_t size = pop().u32;
                     uint32_t table_idx = read_leb128(iter);
-                    tables[table_idx].memset(ptr, value, size);
+                    tables[table_idx]->memset(ptr, value, size);
                     break;
                 }
             }
