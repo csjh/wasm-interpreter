@@ -4,6 +4,7 @@
 #include <cassert>
 #include <cstdint>
 #include <cstring>
+#include <functional>
 #include <iostream>
 #include <memory>
 #include <unordered_map>
@@ -133,12 +134,86 @@ struct WasmGlobal {
     valtype type;
     mut _mut;
     WasmValue value;
+
+    WasmGlobal(valtype type, mut _mut, WasmValue value)
+        : type(type), _mut(_mut), value(value) {}
 };
+
+template <typename T> struct function_traits;
+
+template <typename R, typename... Args> struct function_traits<R (*)(Args...)> {
+    using args = std::tuple<Args...>;
+    using return_type = R;
+};
+
+template <template <typename...> class T, typename U>
+constexpr bool is_specialization_of = false;
+
+template <template <typename...> class T, typename... Us>
+constexpr bool is_specialization_of<T, T<Us...>> = true;
+
+// Helper to convert tuple to multiple values
+template <typename Tuple, size_t... I>
+void push_tuple_to_wasm(const Tuple &t, WasmValue *out,
+                        std::index_sequence<I...>) {
+    ((out[I] = std::get<I>(t)), ...);
+}
+
+// obtained via wasm_functionify<func>
+using static_host_function = void(WasmValue *);
+// obtained via wasm_functionify(func);
+using dynamic_host_function = std::function<static_host_function>;
+
+template <typename F, typename Callable>
+void call_with_stack(Callable &&func, WasmValue *stack) {
+    using Fn = function_traits<F>;
+    using FnArgs = typename Fn::args;
+    using ReturnType = typename Fn::return_type;
+    constexpr size_t num_args = std::tuple_size_v<FnArgs>;
+
+    // Convert input arguments to tuple
+    auto args = [&]<size_t... I>(std::index_sequence<I...>) {
+        return FnArgs{(stack[I])...};
+    }(std::make_index_sequence<num_args>{});
+
+    if constexpr (std::is_void_v<ReturnType>) {
+        std::apply(func, args);
+    } else if constexpr (is_specialization_of<std::tuple, ReturnType>) {
+        auto ret = std::apply(func, args);
+        push_tuple_to_wasm(
+            ret, stack,
+            std::make_index_sequence<std::tuple_size_v<ReturnType>>{});
+    } else {
+        *stack = std::apply(func, args);
+    }
+}
+
+template <auto func> void wasm_functionify(WasmValue *stack) {
+    call_with_stack<decltype(func)>(func, stack);
+}
+
+template <typename F>
+dynamic_host_function wasm_functionify(std::function<F> func) {
+    return [func](WasmValue *stack) { call_with_stack<F *>(func, stack); };
+}
 
 struct FunctionInfo {
     uint8_t *start;
     Signature type;
     std::vector<valtype> locals;
+    static_host_function *static_fn;
+    dynamic_host_function dyn_fn;
+
+    FunctionInfo() = default;
+
+    FunctionInfo(uint8_t *start, Signature type, std::vector<valtype> locals)
+        : start(start), type(type), locals(locals) {}
+
+    FunctionInfo(std::function<void()> fn, Signature type)
+        : start(nullptr), type(type), locals({}) {}
+
+    FunctionInfo(static_host_function *fn, Signature type)
+        : type(type), dyn_fn(fn) {}
 };
 
 struct BrTarget {

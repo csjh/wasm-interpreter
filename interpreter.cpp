@@ -257,32 +257,83 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
                                (iter + module_len).unsafe_ptr())) {
                 throw malformed_error("invalid UTF-8 encoding");
             }
+            std::string module(
+                reinterpret_cast<char *>(iter.get_with_at_least(module_len)),
+                module_len);
+            if (!imports.contains(module)) {
+                throw validation_error("unknown import");
+            }
+            const auto &module_imports = imports.at(module);
             iter += module_len;
+
             uint32_t field_len = safe_read_leb128<uint32_t>(iter);
             if (!is_valid_utf8(iter.get_with_at_least(field_len),
                                (iter + field_len).unsafe_ptr())) {
                 throw malformed_error("invalid UTF-8 encoding");
             }
+            std::string field(
+                reinterpret_cast<char *>(iter.get_with_at_least(field_len)),
+                field_len);
             iter += field_len;
+            if (!module_imports.contains(field)) {
+                throw validation_error("unknown import");
+            }
+            const auto &import = module_imports.at(field);
 
             uint32_t kind = safe_read_leb128<uint32_t>(iter);
-            if (kind == 0) {
+            if (kind != import.index()) {
+                throw validation_error("incompatible import type");
+            }
+            if (std::holds_alternative<FunctionInfo>(import)) {
                 // func
                 uint32_t typeidx = safe_read_leb128<uint32_t>(iter);
                 if (typeidx >= types.size()) {
                     throw validation_error("unknown type");
                 }
-            } else if (kind == 1) {
+
+                auto fn = std::get<FunctionInfo>(import);
+                if (!SignatureEquality().operator()(types[typeidx], fn.type)) {
+                    throw validation_error("incompatible function type");
+                }
+                fn.type = types[typeidx];
+
+                functions.push_back(fn);
+                n_fn_imports++;
+            } else if (std::holds_alternative<std::shared_ptr<WasmTable>>(
+                           import)) {
                 // table
                 uint32_t reftype = safe_read_leb128<uint32_t>(iter);
                 if (!is_reftype(reftype)) {
                     throw validation_error("invalid reftype");
                 }
-                get_limits(iter);
-            } else if (kind == 2) {
+
+                auto table = std::get<std::shared_ptr<WasmTable>>(import);
+                auto [initial, max] = get_limits(iter);
+                if (table->size() < initial) {
+                    throw validation_error("table size exceeds limit");
+                }
+                if (table->max() > max) {
+                    throw validation_error("table size exceeds limit");
+                }
+                tables.push_back(table);
+            } else if (std::holds_alternative<std::shared_ptr<WasmMemory>>(
+                           import)) {
                 // mem
-                get_limits(iter);
-            } else if (kind == 3) {
+                if (memory) {
+                    throw validation_error("multiple memories");
+                }
+
+                auto [initial, max] = get_limits(iter);
+                auto memory = std::get<std::shared_ptr<WasmMemory>>(import);
+                if (memory->size() < initial) {
+                    throw validation_error("memory size exceeds limit");
+                }
+                if (memory->max() > max) {
+                    throw validation_error("memory size exceeds limit");
+                }
+                this->memory = memory;
+            } else if (std::holds_alternative<std::shared_ptr<WasmGlobal>>(
+                           import)) {
                 // global
                 uint32_t valtype = safe_read_leb128<uint32_t>(iter);
                 if (!is_valtype(valtype) && !is_reftype(valtype)) {
@@ -292,8 +343,14 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
                 if (!is_mut(mut)) {
                     throw malformed_error("invalid mutability");
                 }
-            } else {
-                throw validation_error("invalid import kind");
+
+                auto global = std::get<std::shared_ptr<WasmGlobal>>(import);
+                if (global->_mut != static_cast<enum mut>(mut) ||
+                    global->type != static_cast<enum valtype>(valtype)) {
+                    throw validation_error("incompatible global type");
+                }
+
+                globals.push_back(global);
             }
         }
     });
@@ -420,7 +477,38 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
             if (exports.contains(name)) {
                 throw validation_error("duplicate export name");
             }
-            exports[name] = {export_desc, idx};
+
+            if (export_desc == ExportDesc::func) {
+                if (idx >= functions.size()) {
+                    throw validation_error("invalid function index");
+                }
+                const auto &fn = functions[idx];
+                if (fn.start != nullptr) {
+                    exports[name] = FunctionInfo(
+                        [&] {
+                            call_function_info(fn, nullptr,
+                                               [&] { interpret(fn.start); });
+                        },
+                        fn.type);
+                } else {
+                    exports[name] = fn;
+                }
+            } else if (export_desc == ExportDesc::table) {
+                if (idx >= tables.size()) {
+                    throw validation_error("invalid table index");
+                }
+                exports[name] = tables[idx];
+            } else if (export_desc == ExportDesc::mem) {
+                if (!memory) {
+                    throw validation_error("no memory to export");
+                }
+                exports[name] = memory;
+            } else if (export_desc == ExportDesc::global) {
+                if (idx >= globals.size()) {
+                    throw validation_error("invalid global index");
+                }
+                exports[name] = globals[idx];
+            }
         }
     });
 
@@ -718,33 +806,33 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
             call_function_info(fn, nullptr, [&] { interpret(fn.start); });
         } catch (const trap_error &) {
             throw validation_error("start function trapped");
+        }
     }
-}
 }
 
 inline void Instance::call_function_info(const FunctionInfo &fn,
                                          uint8_t *return_to,
                                          std::function<void()> wasm_call) {
     if (fn.start != nullptr) {
-    // parameters are the first locals and they're taken from the top of
-    // the stack
-    WasmValue *locals_start = stack - fn.type.params.size();
-    WasmValue *locals_end = locals_start + fn.locals.size();
-    // zero out non-parameter locals
-    std::memset(stack, 0, (locals_end - stack) * sizeof(WasmValue));
-    stack = locals_end;
-    frames.emplace_back(
-        StackFrame{locals_start,
-                   {{locals_start, return_to,
-                     static_cast<uint32_t>(fn.type.results.size())}}});
+        // parameters are the first locals and they're taken from the top of
+        // the stack
+        WasmValue *locals_start = stack - fn.type.params.size();
+        WasmValue *locals_end = locals_start + fn.locals.size();
+        // zero out non-parameter locals
+        std::memset(stack, 0, (locals_end - stack) * sizeof(WasmValue));
+        stack = locals_end;
+        frames.emplace_back(
+            StackFrame{locals_start,
+                       {{locals_start, return_to,
+                         static_cast<uint32_t>(fn.type.results.size())}}});
 
 #if WASM_DEBUG
-    constexpr size_t MAX_DEPTH = 1'000;
+        constexpr size_t MAX_DEPTH = 1'000;
 #else
-    constexpr size_t MAX_DEPTH = 1'000'000;
+        constexpr size_t MAX_DEPTH = 1'000'000;
 #endif
-    if (frames.size() > MAX_DEPTH) {
-        trap("call stack exhausted");
+        if (frames.size() > MAX_DEPTH) {
+            trap("call stack exhausted");
         }
 
         wasm_call();
