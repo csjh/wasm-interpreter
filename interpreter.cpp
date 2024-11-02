@@ -485,9 +485,19 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
                 const auto &fn = functions[idx];
                 if (fn.start != nullptr) {
                     exports[name] = FunctionInfo(
-                        [&] {
+                        [&](WasmValue *extern_stack) {
+                            const auto &type = fn.type;
+
+                            for (uint32_t i = 0; i < type.params.size(); i++) {
+                                *stack++ = extern_stack[i];
+                            }
+
                             call_function_info(fn, nullptr,
                                                [&] { interpret(fn.start); });
+
+                            for (uint32_t i = 0; i < type.results.size(); i++) {
+                                extern_stack[i] = *--stack;
+                            }
                         },
                         fn.type);
                 } else {

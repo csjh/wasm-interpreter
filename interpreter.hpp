@@ -209,8 +209,8 @@ struct FunctionInfo {
     FunctionInfo(uint8_t *start, Signature type, std::vector<valtype> locals)
         : start(start), type(type), locals(locals) {}
 
-    FunctionInfo(std::function<void()> fn, Signature type)
-        : start(nullptr), type(type), locals({}) {}
+    FunctionInfo(dynamic_host_function fn, Signature type)
+        : type(type), dyn_fn(fn) {}
 
     FunctionInfo(static_host_function *fn, Signature type)
         : type(type), dyn_fn(fn) {}
