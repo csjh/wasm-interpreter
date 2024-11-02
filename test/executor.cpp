@@ -73,10 +73,31 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(action, type, field, args)
 struct test_module {
     std::string type;
     int line;
+    std::string name;
     std::string filename;
 };
 
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(test_module, type, line, filename)
+namespace nlohmann {
+template <> struct adl_serializer<test_module> {
+    static void to_json(json &j, const test_module &opt) {
+        j = json{{"type", opt.type},
+                 {"line", opt.line},
+                 {"name", opt.name},
+                 {"filename", opt.filename}};
+    }
+
+    static void from_json(const json &j, test_module &opt) {
+        opt.type = j["type"];
+        opt.line = j["line"];
+        opt.filename = j["filename"];
+        if (j["name"].is_string()) {
+            opt.name = j["name"];
+        } else {
+            opt.name = "default";
+        }
+    }
+};
+} // namespace nlohmann
 
 struct test_malformed {
     std::string type;
@@ -88,6 +109,44 @@ struct test_malformed {
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(test_malformed, type, line, filename, text,
                                    module_type)
+
+struct test_unlinkable {
+    std::string type;
+    int line;
+    std::string filename;
+    std::string text;
+    std::string module_type;
+};
+
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(test_unlinkable, type, line, filename, text,
+                                   module_type)
+
+struct test_register {
+    std::string type;
+    int line;
+    std::optional<std::string> name;
+    std::string as;
+};
+
+namespace nlohmann {
+template <> struct adl_serializer<test_register> {
+    static void to_json(json &j, const test_register &opt) {
+        j = json{{"type", opt.type}, {"line", opt.line}, {"as", opt.as}};
+        if (opt.name) {
+            j["name"] = *opt.name;
+        }
+    }
+
+    static void from_json(const json &j, test_register &opt) {
+        opt.type = j["type"];
+        opt.line = j["line"];
+        if (j["name"].is_string()) {
+            opt.name = j["name"];
+        }
+        opt.as = j["as"];
+    }
+};
+} // namespace nlohmann
 
 struct test_return {
     std::string type;
@@ -140,9 +199,9 @@ struct test_exhaustion {
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(test_exhaustion, type, line, action, text,
                                    expected)
 
-using Tests =
-    std::variant<test_module, test_malformed, test_return, test_action,
-                 test_invalid, test_trap, test_exhaustion>;
+using Tests = std::variant<test_module, test_malformed, test_unlinkable,
+                           test_return, test_action, test_invalid, test_trap,
+                           test_exhaustion, test_register>;
 
 namespace nlohmann {
 template <> struct adl_serializer<Tests> {
@@ -159,6 +218,8 @@ template <> struct adl_serializer<Tests> {
             opt = j.get<test_malformed>();
         } else if (j["type"] == "assert_invalid") {
             opt = j.get<test_invalid>();
+        } else if (j["type"] == "assert_unlinkable") {
+            opt = j.get<test_unlinkable>();
         } else if (j["type"] == "assert_trap") {
             opt = j.get<test_trap>();
         } else if (j["type"] == "assert_exhaustion") {
@@ -179,7 +240,7 @@ struct wastjson {
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(wastjson, source_filename, commands)
 
-mitey::Instance *from_file(const std::string &filename) {
+std::unique_ptr<mitey::Instance> from_file(const std::string &filename) {
     std::ifstream wasm_file{filename, std::ios::binary};
     if (!wasm_file) {
         throw std::system_error(errno, std::system_category(), filename);
@@ -196,7 +257,7 @@ mitey::Instance *from_file(const std::string &filename) {
     wasm_file.read(reinterpret_cast<char *>(bytes.get()), length);
     wasm_file.close();
 
-    return new mitey::Instance(std::move(bytes), length);
+    return std::make_unique<mitey::Instance>(std::move(bytes), length);
 }
 
 namespace fs = std::filesystem;
@@ -220,21 +281,22 @@ int main(int argv, char **argc) {
 
     auto wast = j.template get<wastjson>();
 
-    mitey::Instance *instance = nullptr;
+    std::unordered_map<std::string, std::unique_ptr<mitey::Instance>> instances;
+    mitey::Imports imports;
     for (auto &t : wast.commands) {
         nlohmann::json j = t;
         std::cerr << "Running test: " << j << std::endl;
 
         if (std::holds_alternative<test_module>(t)) {
             auto &m = std::get<test_module>(t);
-            delete instance;
-            instance = from_file(resolve_relative(filename, m.filename));
+            instances[m.name] =
+                from_file(resolve_relative(filename, m.filename));
         } else if (std::holds_alternative<test_malformed>(t)) {
             auto &m = std::get<test_malformed>(t);
             if (m.filename.ends_with(".wat"))
                 continue;
             try {
-                delete from_file(resolve_relative(filename, m.filename));
+                from_file(resolve_relative(filename, m.filename));
 
                 std::cerr << "Expected malformed error for file: " << m.filename
                           << std::endl;
@@ -253,8 +315,8 @@ int main(int argv, char **argc) {
         } else if (std::holds_alternative<test_return>(t)) {
             auto &m = std::get<test_return>(t);
 
-            auto result = instance->execute(m.action.field,
-                                            to_wasm_values(m.action.args));
+            auto result = instances["default"]->execute(
+                m.action.field, to_wasm_values(m.action.args));
 
             if (result.size() != m.expected.size()) {
                 std::cerr << "Expected " << m.expected.size()
@@ -302,7 +364,7 @@ int main(int argv, char **argc) {
         } else if (std::holds_alternative<test_invalid>(t)) {
             auto &m = std::get<test_invalid>(t);
             try {
-                delete from_file(resolve_relative(filename, m.filename));
+                from_file(resolve_relative(filename, m.filename));
 
                 std::cerr << "Expected validation error for file: "
                           << m.filename << std::endl;
@@ -321,8 +383,8 @@ int main(int argv, char **argc) {
         } else if (std::holds_alternative<test_trap>(t)) {
             auto &m = std::get<test_trap>(t);
             try {
-                auto result = instance->execute(m.action.field,
-                                                to_wasm_values(m.action.args));
+                auto result = instances["default"]->execute(
+                    m.action.field, to_wasm_values(m.action.args));
 
                 std::cerr << "Expected trap for action: " << m.action.field
                           << std::endl;
@@ -341,8 +403,8 @@ int main(int argv, char **argc) {
         } else if (std::holds_alternative<test_exhaustion>(t)) {
             auto &m = std::get<test_exhaustion>(t);
             try {
-                auto result = instance->execute(m.action.field,
-                                                to_wasm_values(m.action.args));
+                auto result = instances["default"]->execute(
+                    m.action.field, to_wasm_values(m.action.args));
 
                 std::cerr << "Expected exhaustion for action: "
                           << m.action.field << std::endl;
@@ -363,12 +425,38 @@ int main(int argv, char **argc) {
             auto &m = std::get<test_action>(t);
             assert(m.expected.size() == 0);
 
-            auto result = instance->execute(m.action.field,
-                                            to_wasm_values(m.action.args));
+            auto result = instances["default"]->execute(
+                m.action.field, to_wasm_values(m.action.args));
+        } else if (std::holds_alternative<test_unlinkable>(t)) {
+            auto &m = std::get<test_unlinkable>(t);
+            try {
+                from_file(resolve_relative(filename, m.filename));
+
+                std::cerr << "Expected link error for file: " << m.filename
+                          << std::endl;
+                return 1;
+            } catch (mitey::link_error &e) {
+                if (std::string(e.what()) != m.text) {
+                    std::cerr << "Expected error message: " << m.text
+                              << " but got: " << e.what() << std::endl;
+                    return 1;
+                }
+            } catch (std::runtime_error &e) {
+                std::cerr << "Expected link error with message: " << m.text
+                          << " but got: " << e.what() << std::endl;
+                return 1;
+            }
+        } else if (std::holds_alternative<test_register>(t)) {
+            auto &m = std::get<test_register>(t);
+            if (m.name) {
+                imports[m.as] = instances[*m.name]->get_exports();
+            } else {
+                imports[m.as] = instances["default"]->get_exports();
+            }
+        } else {
+            std::cerr << "Unhandled std::variant type" << std::endl;
         }
     }
-
-    delete instance;
 
     return 0;
 }
