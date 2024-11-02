@@ -20,6 +20,11 @@ class trap_error : public std::runtime_error {
     trap_error(const std::string &message) : std::runtime_error(message) {}
 };
 
+class link_error : public std::runtime_error {
+  public:
+    link_error(const std::string &message) : std::runtime_error(message) {}
+};
+
 enum class valtype : uint8_t {
     empty = 0x40,
 
