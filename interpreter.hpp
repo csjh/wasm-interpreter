@@ -206,6 +206,13 @@ class safe_byte_iterator {
     uint8_t *unsafe_ptr() const { return iter; }
 };
 
+using ExportValue =
+    std::variant<FunctionInfo, std::shared_ptr<WasmTable>,
+                 std::shared_ptr<WasmMemory>, std::shared_ptr<WasmGlobal>>;
+using Exports = std::unordered_map<std::string, ExportValue>;
+using ModuleImports = std::unordered_map<std::string, ExportValue>;
+using Imports = std::unordered_map<std::string, ModuleImports>;
+
 template <size_t N> struct string_literal {
     constexpr string_literal(const char (&str)[N]) {
         std::copy_n(str, N, value);
@@ -247,7 +254,7 @@ class Instance {
     // types from type section
     std::vector<Signature> types;
     // exports from export section
-    std::unordered_map<std::string, Export> exports;
+    Exports exports;
     // stack start for debugging and emptyness assertions
     WasmValue *stack_start;
     // data segments
@@ -271,7 +278,8 @@ class Instance {
         }
     }
 
-    void prepare_to_call(const FunctionInfo &idx, uint8_t *return_to);
+    inline void call_function_info(const FunctionInfo &idx, uint8_t *return_to,
+                                   std::function<void()> wasm_call);
     void interpret(uint8_t *iter);
 
     WasmValue interpret_const(safe_byte_iterator &iter, valtype expected);
@@ -284,74 +292,16 @@ class Instance {
     template <typename Tuple, size_t... I>
     Tuple create_tuple(std::index_sequence<I...>);
 
-    template <typename FuncPointer, typename... Args>
-    std::invoke_result_t<FuncPointer, Args...> execute(uint32_t idx,
-                                                       Args... args);
-
   public:
     Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> bytes,
              uint32_t length, const Imports &imports = {});
 
     ~Instance();
 
-    template <typename FuncPointer, typename... Args>
-    std::invoke_result_t<FuncPointer, Args...> execute(const std::string &name,
-                                                       Args... args) {
-        auto exp = exports.find(name);
-        if (exp == exports.end()) {
-            throw std::out_of_range("Function not found");
-        } else if (exp->second.desc != ExportDesc::func) {
-            throw std::invalid_argument("Export is not a function");
-        }
-
-        return execute<FuncPointer>(exp->second.idx, args...);
-    }
-
-    template <string_literal fn_name, typename FuncPointer, typename... Args>
-    std::invoke_result_t<FuncPointer, Args...> execute(Args... args) {
-        return execute<FuncPointer>(fn_name.value, args...);
-    }
-
-    // mainly intended for tests
-    std::vector<WasmValue> execute(const std::string &name,
-                                   const std::vector<WasmValue> &args) {
-        auto exp = exports.find(name);
-        if (exp == exports.end()) {
-            throw std::out_of_range("Function not found");
-        } else if (exp->second.desc != ExportDesc::func) {
-            throw std::invalid_argument("Export is not a function");
-        }
-
-        auto fn = functions[exp->second.idx];
-        if (fn.type.params.size() != args.size()) {
-            throw std::invalid_argument("Incorrect number of arguments");
-        }
-
-        for (auto &arg : args) {
-            push_arg(arg);
-        }
-
-        prepare_to_call(fn, nullptr);
-        try {
-            interpret(fn.start);
-        } catch (trap_error &e) {
-            stack = stack_start;
-            frames.clear();
-            throw;
-        }
-
-        stack = stack_start;
-        return std::vector<WasmValue>(stack, stack + fn.type.results.size());
-    }
+    const Exports &get_exports() { return exports; }
 };
 
 template <typename T> inline constexpr bool always_false = false;
-
-template <template <typename...> class T, typename U>
-constexpr bool is_specialization_of = false;
-
-template <template <typename...> class T, typename... Us>
-constexpr bool is_specialization_of<T, T<Us...>> = true;
 
 template <typename Tuple, size_t... I>
 Tuple Instance::create_tuple(std::index_sequence<I...>) {
@@ -395,47 +345,6 @@ template <typename T> void Instance::push_arg(T arg) {
         *stack++ = arg;
     } else {
         static_assert(always_false<T>, "Unsupported argument type");
-    }
-}
-
-template <typename T> struct function_traits;
-
-template <typename R, typename... Args> struct function_traits<R (*)(Args...)> {
-    using args = std::tuple<Args...>;
-    using return_type = R;
-};
-
-template <typename FuncPointer, typename... Args>
-std::invoke_result_t<FuncPointer, Args...> Instance::execute(uint32_t idx,
-                                                             Args... args) {
-    using Fn = function_traits<FuncPointer>;
-    using FnArgs = Fn::args;
-    using ReturnType = Fn::return_type;
-
-    if (idx >= functions.size()) {
-        throw std::out_of_range("Function index out of range");
-    }
-
-    const auto &fn = functions[idx];
-
-    if (sizeof...(Args) != fn.type.params.size()) {
-        throw std::invalid_argument("Incorrect number of arguments");
-    }
-
-    // push arguments onto the stack, casting to FnArgs
-    std::apply([&](auto... arg) { (push_arg(arg), ...); }, FnArgs(args...));
-
-    prepare_to_call(fn, nullptr);
-    try {
-        interpret(fn.start);
-    } catch (trap_error &e) {
-        stack = stack_start;
-        frames.clear();
-        throw;
-    }
-
-    if constexpr (!std::is_same_v<ReturnType, void>) {
-        return pop_result<ReturnType>();
     }
 }
 

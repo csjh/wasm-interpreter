@@ -237,15 +237,13 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
 
             types.emplace_back(fn);
         }
-
-        for (FunctionInfo &fn : functions) {
-            fn.type = types[fn.type.typeidx];
-        }
     });
 
     skip_custom_section();
 
-    // todo: import section
+    uint32_t n_fn_imports = 0;
+
+    // import section
     section(2, [&] {
         uint32_t n_imports = safe_read_leb128<uint32_t>(iter);
 
@@ -599,7 +597,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
         [&] {
             uint32_t n_functions = safe_read_leb128<uint32_t>(iter);
 
-            if (n_functions != functions.size()) {
+            if (n_functions + n_fn_imports != functions.size()) {
                 throw malformed_error(
                     "function and code section have inconsistent lengths");
             }
@@ -632,7 +630,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
             }
         },
         [&] {
-            if (functions.size() != 0) {
+            if (functions.size() != n_fn_imports) {
                 throw malformed_error(
                     "function and code section have inconsistent lengths");
             }
@@ -711,11 +709,23 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
     Validator(*this).validate(bytes.get() + length);
 
     if (start != std::numeric_limits<uint32_t>::max()) {
-        execute<void (*)()>(start);
+        const auto &fn = functions[start];
+        if (fn.type.params.size() || fn.type.results.size()) {
+            throw validation_error(
+                "start function must have no params or results");
+        }
+        try {
+            call_function_info(fn, nullptr, [&] { interpret(fn.start); });
+        } catch (const trap_error &) {
+            throw validation_error("start function trapped");
     }
 }
+}
 
-void Instance::prepare_to_call(const FunctionInfo &fn, uint8_t *return_to) {
+inline void Instance::call_function_info(const FunctionInfo &fn,
+                                         uint8_t *return_to,
+                                         std::function<void()> wasm_call) {
+    if (fn.start != nullptr) {
     // parameters are the first locals and they're taken from the top of
     // the stack
     WasmValue *locals_start = stack - fn.type.params.size();
@@ -735,6 +745,17 @@ void Instance::prepare_to_call(const FunctionInfo &fn, uint8_t *return_to) {
 #endif
     if (frames.size() > MAX_DEPTH) {
         trap("call stack exhausted");
+        }
+
+        wasm_call();
+    } else {
+        stack -= fn.type.params.size();
+        if (fn.static_fn != nullptr) {
+            fn.static_fn(stack);
+        } else {
+            fn.dyn_fn(stack);
+        }
+        stack += fn.type.results.size();
     }
 }
 
@@ -1090,14 +1111,7 @@ void Instance::interpret(uint8_t *iter) {
             return;
         case call: {
             FunctionInfo &fn = functions[read_leb128(iter)];
-            prepare_to_call(fn, iter);
-            if (fn.start == nullptr) {
-                // host function
-                fn.fn();
-            } else {
-                // wasm function
-                iter = fn.start;
-            }
+            call_function_info(fn, iter, [&] { iter = fn.start; });
             break;
         }
         case call_indirect: {
@@ -1113,14 +1127,7 @@ void Instance::interpret(uint8_t *iter) {
                 trap("indirect call type mismatch");
             }
             FunctionInfo &fn = functions[funcref.funcidx];
-            prepare_to_call(fn, iter);
-            if (fn.start == nullptr) {
-                // host function
-                fn.fn();
-            } else {
-                // wasm function
-                iter = fn.start;
-            }
+            call_function_info(fn, iter, [&] { iter = fn.start; });
             break;
         }
         case drop:
