@@ -108,6 +108,9 @@ std::tuple<uint32_t, uint32_t> get_limits(safe_byte_iterator &iter) {
     uint32_t initial = safe_read_leb128<uint32_t>(iter);
     uint32_t maximum = flags == 1 ? safe_read_leb128<uint32_t>(iter)
                                   : std::numeric_limits<uint32_t>::max();
+    if (maximum < initial) {
+        throw validation_error("maximum is less than initial");
+    }
     return {initial, maximum};
 }
 
@@ -1474,8 +1477,6 @@ WasmMemory::~WasmMemory() {
     }
 }
 
-uint32_t WasmMemory::size() { return current; }
-
 uint32_t WasmMemory::grow(uint32_t delta) {
     if (delta == 0)
         return current;
@@ -1530,8 +1531,6 @@ WasmTable::WasmTable(WasmTable &&table) {
 }
 
 WasmTable::~WasmTable() { free(elements); }
-
-uint32_t WasmTable::size() { return current; }
 
 uint32_t WasmTable::grow(uint32_t delta, WasmValue value) {
     uint32_t new_current = current + delta;

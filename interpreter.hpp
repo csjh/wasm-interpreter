@@ -72,7 +72,8 @@ class WasmMemory {
 
     ~WasmMemory();
 
-    uint32_t size();
+    uint32_t size() { return current; }
+    uint32_t max() { return maximum; }
     uint32_t grow(uint32_t delta);
 
     template <typename T>
@@ -117,7 +118,8 @@ class WasmTable {
 
     ~WasmTable();
 
-    uint32_t size();
+    uint32_t size() { return current; }
+    uint32_t max() { return maximum; }
     uint32_t grow(uint32_t delta, WasmValue value);
     WasmValue get(uint32_t idx);
     void set(uint32_t idx, WasmValue value);
