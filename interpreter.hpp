@@ -284,13 +284,7 @@ class Instance {
 
     WasmValue interpret_const(safe_byte_iterator &iter, valtype expected);
 
-    template <typename T> void push_arg(T arg);
-    template <typename ReturnType> ReturnType pop_result();
-
     StackFrame &frame() { return frames.back(); }
-
-    template <typename Tuple, size_t... I>
-    Tuple create_tuple(std::index_sequence<I...>);
 
   public:
     Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> bytes,
@@ -300,53 +294,6 @@ class Instance {
 
     const Exports &get_exports() { return exports; }
 };
-
-template <typename T> inline constexpr bool always_false = false;
-
-template <typename Tuple, size_t... I>
-Tuple Instance::create_tuple(std::index_sequence<I...>) {
-    return std::make_tuple(
-        static_cast<std::tuple_element_t<I, Tuple>>(stack[I])...);
-}
-
-// Helper function to pop and return the result
-template <typename ReturnType> ReturnType Instance::pop_result() {
-    if constexpr (is_specialization_of<std::tuple, ReturnType>) {
-        constexpr size_t size = std::tuple_size_v<ReturnType>;
-
-        if (stack - stack_start != size) [[unlikely]] {
-            throw std::out_of_range("Incorrect number of results");
-        }
-
-        stack = stack_start;
-        return create_tuple<ReturnType>(std::make_index_sequence<size>{});
-    } else {
-        if (stack - stack_start != 1) [[unlikely]] {
-            throw std::out_of_range("Incorrect number of results");
-        }
-
-        return static_cast<ReturnType>(*--stack);
-    }
-}
-
-// Helper function to push an argument onto the stack
-template <typename T> void Instance::push_arg(T arg) {
-    if constexpr (std::is_same_v<T, WasmValue>) {
-        *stack++ = arg;
-    } else if constexpr (std::is_same_v<T, int32_t> ||
-                         std::is_same_v<T, uint32_t>) {
-        *stack++ = static_cast<int32_t>(arg);
-    } else if constexpr (std::is_same_v<T, int64_t> ||
-                         std::is_same_v<T, uint64_t>) {
-        *stack++ = static_cast<int64_t>(arg);
-    } else if constexpr (std::is_same_v<T, float>) {
-        *stack++ = arg;
-    } else if constexpr (std::is_same_v<T, double>) {
-        *stack++ = arg;
-    } else {
-        static_assert(always_false<T>, "Unsupported argument type");
-    }
-}
 
 constexpr uint32_t stack_size = 5 * 1024 * 1024; // 5mb
 } // namespace mitey
