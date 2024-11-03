@@ -60,9 +60,8 @@ class WasmMemory {
     uint32_t current;
     uint32_t maximum;
 
-    static const uint32_t MAX_PAGES = 65536;
-
   public:
+    static const uint32_t MAX_PAGES = 65536;
     static const uint32_t PAGE_SIZE = 65536;
 
     WasmMemory();
@@ -457,6 +456,9 @@ class Instance {
     WasmValue interpret_const(safe_byte_iterator &iter, valtype expected);
 
     StackFrame &frame() { return frames.back(); }
+
+    // makes a function run independently of the instance
+    FunctionInfo externalize_function(const FunctionInfo &fn);
 
   public:
     Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> bytes,

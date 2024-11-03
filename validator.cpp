@@ -103,7 +103,15 @@ void Validator::validate(safe_byte_iterator &iter, const Signature &signature,
 
 #define LOAD(type, stacktype)                                                  \
     {                                                                          \
-        uint32_t align = 1 << safe_read_leb128<uint32_t>(iter);                \
+        uint32_t a = safe_read_leb128<uint32_t>(iter);                         \
+        if ((1 << 6) & a) {                                                    \
+            a -= 1 << 6;                                                       \
+            /* todo: test multi memory proposal */                             \
+            a = safe_read_leb128<uint32_t>(iter);                              \
+        } else {                                                               \
+            ensure(instance.memory != nullptr, "unknown memory");              \
+        }                                                                      \
+        uint32_t align = 1 << a;                                               \
         ensure(align <= sizeof(type),                                          \
                "alignment must not be larger than natural");                   \
         /* uint32_t offset = */ safe_read_leb128<uint32_t>(iter);              \
@@ -113,7 +121,15 @@ void Validator::validate(safe_byte_iterator &iter, const Signature &signature,
 
 #define STORE(type, stacktype)                                                 \
     {                                                                          \
-        uint32_t align = 1 << safe_read_leb128<uint32_t>(iter);                \
+        uint32_t a = safe_read_leb128<uint32_t>(iter);                         \
+        if ((1 << 6) & a) {                                                    \
+            a -= 1 << 6;                                                       \
+            /* todo: test multi memory proposal */                             \
+            a = safe_read_leb128<uint32_t>(iter);                              \
+        } else {                                                               \
+            ensure(instance.memory != nullptr, "unknown memory");              \
+        }                                                                      \
+        uint32_t align = 1 << a;                                               \
         ensure(align <= sizeof(type),                                          \
                "alignment must not be larger than natural");                   \
         /* uint32_t offset = */ safe_read_leb128<uint32_t>(iter);              \
@@ -332,12 +348,14 @@ void Validator::validate(safe_byte_iterator &iter, const Signature &signature,
         case memorysize: {
             if (*iter++ != 0)
                 throw malformed_error("zero flag expected");
+            ensure(instance.memory != nullptr, "unknown memory");
             apply({{}, {valtype::i32}});
             break;
         }
         case memorygrow: {
             if (*iter++ != 0)
                 throw malformed_error("zero flag expected");
+            ensure(instance.memory != nullptr, "unknown memory");
             apply({{valtype::i32}, {valtype::i32}});
             break;
         }
@@ -536,9 +554,11 @@ void Validator::validate(safe_byte_iterator &iter, const Signature &signature,
             using enum FCInstruction;
             switch (static_cast<FCInstruction>(byte)) {
                 case memory_init: {
-                    ensure(instance.memory->size() > 0, "no memory");
                     uint32_t seg_idx = safe_read_leb128<uint32_t>(iter);
                     ensure(seg_idx < instance.data_segments.size(), "invalid segment index");
+
+                    if (*iter++ != 0) throw malformed_error("zero flag expected");
+                    ensure(instance.memory != nullptr, "unknown memory");
 
                     apply({{valtype::i32, valtype::i32, valtype::i32}, {}});
                     break;
@@ -549,13 +569,16 @@ void Validator::validate(safe_byte_iterator &iter, const Signature &signature,
                     break;
                 }
                 case memory_copy: {
-                    ensure(instance.memory->size() > 0, "no memory");
+                    if (*iter++ != 0) throw malformed_error("zero flag expected");
+                    if (*iter++ != 0) throw malformed_error("zero flag expected");
+                    ensure(instance.memory != nullptr, "unknown memory");
 
                     apply({{valtype::i32, valtype::i32, valtype::i32}, {}});
                     break;
                 }
                 case memory_fill: {
-                    ensure(instance.memory->size() > 0, "no memory");
+                    if (*iter++ != 0) throw malformed_error("zero flag expected");
+                    ensure(instance.memory != nullptr, "unknown memory");
 
                     apply({{valtype::i32, valtype::i32, valtype::i32}, {}});
                     break;

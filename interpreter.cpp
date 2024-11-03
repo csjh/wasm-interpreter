@@ -100,18 +100,36 @@ struct SignatureEquality {
     }
 };
 
-std::tuple<uint32_t, uint32_t> get_limits(safe_byte_iterator &iter) {
+std::tuple<uint32_t, uint32_t> get_limits(safe_byte_iterator &iter,
+                                          uint32_t upper_limit) {
     uint32_t flags = safe_read_leb128<uint32_t>(iter);
     if (flags != 0 && flags != 1) {
         throw validation_error("invalid flags");
     }
     uint32_t initial = safe_read_leb128<uint32_t>(iter);
-    uint32_t maximum = flags == 1 ? safe_read_leb128<uint32_t>(iter)
-                                  : std::numeric_limits<uint32_t>::max();
-    if (maximum < initial) {
-        throw validation_error("maximum is less than initial");
+    uint32_t max = flags == 1 ? safe_read_leb128<uint32_t>(iter) : upper_limit;
+    return {initial, max};
+}
+
+std::tuple<uint32_t, uint32_t> get_memory_limits(safe_byte_iterator &iter) {
+    auto [initial, max] = get_limits(iter, WasmMemory::MAX_PAGES);
+    if (initial > WasmMemory::MAX_PAGES || max > WasmMemory::MAX_PAGES) {
+        throw validation_error(
+            "memory size must be at most 65536 pages (4GiB)");
     }
-    return {initial, maximum};
+    if (max < initial) {
+        throw validation_error("size minimum must not be greater than maximum");
+    }
+    return {initial, max};
+}
+
+std::tuple<uint32_t, uint32_t> get_table_limits(safe_byte_iterator &iter) {
+    auto [initial, max] =
+        get_limits(iter, std::numeric_limits<uint32_t>::max());
+    if (max < initial) {
+        throw validation_error("size minimum must not be greater than maximum");
+    }
+    return {initial, max};
 }
 
 Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
@@ -260,10 +278,6 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
             std::string module(
                 reinterpret_cast<char *>(iter.get_with_at_least(module_len)),
                 module_len);
-            if (!imports.contains(module)) {
-                throw validation_error("unknown import");
-            }
-            const auto &module_imports = imports.at(module);
             iter += module_len;
 
             uint32_t field_len = safe_read_leb128<uint32_t>(iter);
@@ -275,6 +289,11 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
                 reinterpret_cast<char *>(iter.get_with_at_least(field_len)),
                 field_len);
             iter += field_len;
+
+            if (!imports.contains(module)) {
+                throw validation_error("unknown import");
+            }
+            const auto &module_imports = imports.at(module);
             if (!module_imports.contains(field)) {
                 throw validation_error("unknown import");
             }
@@ -282,7 +301,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
 
             uint32_t kind = safe_read_leb128<uint32_t>(iter);
             if (kind != import.index()) {
-                throw validation_error("incompatible import type");
+                throw link_error("incompatible import type");
             }
             if (std::holds_alternative<FunctionInfo>(import)) {
                 // func
@@ -293,7 +312,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
 
                 auto fn = std::get<FunctionInfo>(import);
                 if (!SignatureEquality().operator()(types[typeidx], fn.type)) {
-                    throw validation_error("incompatible function type");
+                    throw link_error("incompatible import type");
                 }
                 fn.type = types[typeidx];
 
@@ -308,7 +327,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
                 }
 
                 auto table = std::get<std::shared_ptr<WasmTable>>(import);
-                auto [initial, max] = get_limits(iter);
+                auto [initial, max] = get_table_limits(iter);
                 if (table->size() < initial) {
                     throw validation_error("table size exceeds limit");
                 }
@@ -323,7 +342,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
                     throw validation_error("multiple memories");
                 }
 
-                auto [initial, max] = get_limits(iter);
+                auto [initial, max] = get_memory_limits(iter);
                 auto memory = std::get<std::shared_ptr<WasmMemory>>(import);
                 if (memory->size() < initial) {
                     throw validation_error("memory size exceeds limit");
@@ -347,7 +366,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
                 auto global = std::get<std::shared_ptr<WasmGlobal>>(import);
                 if (global->_mut != static_cast<enum mut>(mut) ||
                     global->type != static_cast<enum valtype>(valtype)) {
-                    throw validation_error("incompatible global type");
+                    throw link_error("incompatible import type");
                 }
 
                 globals.push_back(global);
@@ -393,9 +412,9 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
                 throw validation_error("invalid table element type");
             }
 
-            auto [initial, maximum] = get_limits(iter);
+            auto [initial, max] = get_memory_limits(iter);
             tables.emplace_back(std::make_shared<WasmTable>(
-                static_cast<valtype>(elem_type), initial, maximum));
+                static_cast<valtype>(elem_type), initial, max));
         }
     });
 
@@ -414,8 +433,8 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
                 throw validation_error("multiple memories");
             }
 
-            auto [initial, maximum] = get_limits(iter);
-            memory = std::make_shared<WasmMemory>(initial, maximum);
+            auto [initial, max] = get_memory_limits(iter);
+            memory = std::make_shared<WasmMemory>(initial, max);
         }
     });
 
@@ -480,48 +499,26 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
 
             if (export_desc == ExportDesc::func) {
                 if (idx >= functions.size()) {
-                    throw validation_error("invalid function index");
+                    throw validation_error("unknown function");
                 }
                 const auto &fn = functions[idx];
-                if (fn.static_fn || fn.dyn_fn) {
-                    exports[name] = fn;
-                } else {
-                    exports[name] = FunctionInfo(
-                        [&](WasmValue *extern_stack) {
-                            const auto &type = fn.type;
-
-                            for (uint32_t i = 0; i < type.params.size(); i++) {
-                                *stack++ = extern_stack[i];
-                            }
-
-                            try {
-                                call_function_info(
-                                    fn, nullptr, [&] { interpret(fn.start); });
-                            } catch (trap_error &e) {
-                                stack = stack_start;
-                                frames.clear();
-                                throw;
-                            }
-
-                            for (uint32_t i = 0; i < type.results.size(); i++) {
-                                extern_stack[i] = *--stack;
-                            }
-                        },
-                        fn.type);
-                }
+                exports[name] = externalize_function(fn);
             } else if (export_desc == ExportDesc::table) {
                 if (idx >= tables.size()) {
-                    throw validation_error("invalid table index");
+                    throw validation_error("unknown table");
                 }
                 exports[name] = tables[idx];
             } else if (export_desc == ExportDesc::mem) {
                 if (!memory) {
                     throw validation_error("no memory to export");
                 }
+                if (idx != 0) {
+                    throw validation_error("unknown memory");
+                }
                 exports[name] = memory;
             } else if (export_desc == ExportDesc::global) {
                 if (idx >= globals.size()) {
-                    throw validation_error("invalid global index");
+                    throw validation_error("unknown global");
                 }
                 exports[name] = globals[idx];
             }
@@ -535,7 +532,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
     section(8, [&] {
         start = safe_read_leb128<uint32_t>(iter);
         if (start >= functions.size()) {
-            throw validation_error("invalid start function");
+            throw validation_error("unknown function");
         }
     });
 
@@ -707,6 +704,11 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
             }
 
             for (FunctionInfo &fn : functions) {
+                if (fn.static_fn || fn.dyn_fn) {
+                    // skip imported functions
+                    continue;
+                }
+
                 fn.locals = fn.type.params;
 
                 uint32_t function_length = safe_read_leb128<uint32_t>(iter);
@@ -762,6 +764,9 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
             if (memidx != 0) {
                 throw validation_error("non-zero memory index");
             }
+            if (!memory) {
+                throw validation_error("unknown memory");
+            }
 
             if (segment_flag & 1) {
                 // passive segment
@@ -815,14 +820,43 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
     if (start != std::numeric_limits<uint32_t>::max()) {
         const auto &fn = functions[start];
         if (fn.type.params.size() || fn.type.results.size()) {
-            throw validation_error(
-                "start function must have no params or results");
+            throw validation_error("start function");
         }
         try {
             call_function_info(fn, nullptr, [&] { interpret(fn.start); });
         } catch (const trap_error &) {
             throw validation_error("start function trapped");
         }
+    }
+}
+
+FunctionInfo Instance::externalize_function(const FunctionInfo &fn) {
+    if (fn.static_fn || fn.dyn_fn) {
+        // already external
+        return fn;
+    } else {
+        return FunctionInfo(
+            [&](WasmValue *extern_stack) {
+                const auto &type = fn.type;
+
+                for (uint32_t i = 0; i < type.params.size(); i++) {
+                    *stack++ = extern_stack[i];
+                }
+
+                try {
+                    call_function_info(fn, nullptr,
+                                       [&] { interpret(fn.start); });
+                } catch (trap_error &e) {
+                    stack = stack_start;
+                    frames.clear();
+                    throw;
+                }
+
+                for (uint32_t i = 0; i < type.results.size(); i++) {
+                    extern_stack[i] = *--stack;
+                }
+            },
+            fn.type);
     }
 }
 
@@ -1225,7 +1259,7 @@ void Instance::interpret(uint8_t *iter) {
 
             Funcref funcref = tables[table_idx]->get(elem_idx);
             if (!funcref.nonnull) {
-                trap("indirect call to null");
+                trap("uninitialized element");
             }
             if (funcref.typeidx != types[type_idx].typeidx) {
                 trap("indirect call type mismatch");
@@ -1452,7 +1486,7 @@ void Instance::interpret(uint8_t *iter) {
         case ref_func: {
             uint32_t func_idx = read_leb128(iter);
             if (func_idx >= functions.size()) {
-                trap("invalid function index");
+                trap("unknown function");
             }
             push(Funcref{functions[func_idx].type.typeidx, true, func_idx});
             break;
