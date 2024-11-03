@@ -14,6 +14,11 @@ static inline void _ensure(bool condition, const std::string &msg) {
 
 void Validator::validate(uint8_t *end) {
     for (const auto &fn : instance.functions) {
+        if (!fn.start) {
+            // skip imported functions
+            continue;
+        }
+
         current_fn = fn;
         control_stack.push_back(fn.type.results);
 
