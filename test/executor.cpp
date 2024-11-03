@@ -62,13 +62,72 @@ struct only_type {
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(only_type, type)
 
-struct action {
-    std::string type;
+struct get_action {
+    std::string module;
+    std::string field;
+};
+
+namespace nlohmann {
+template <> struct adl_serializer<get_action> {
+    static void to_json(json &j, const get_action &opt) {
+        j = json{{"module", opt.module}, {"field", opt.field}};
+    }
+
+    static void from_json(const json &j, get_action &opt) {
+        if (j.contains("module")) {
+            opt.module = j["module"];
+        } else {
+            opt.module = "default";
+        }
+        opt.field = j["field"];
+    }
+};
+} // namespace nlohmann
+
+struct invoke_action {
+    std::string module;
     std::string field;
     std::vector<value> args;
 };
 
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(action, type, field, args)
+namespace nlohmann {
+template <> struct adl_serializer<invoke_action> {
+    static void to_json(json &j, const invoke_action &opt) {
+        j = json{
+            {"module", opt.module}, {"field", opt.field}, {"args", opt.args}};
+    }
+
+    static void from_json(const json &j, invoke_action &opt) {
+        if (j.contains("module")) {
+            opt.module = j["module"];
+        } else {
+            opt.module = "default";
+        }
+        opt.field = j["field"];
+        opt.args = j["args"];
+    }
+};
+} // namespace nlohmann
+
+using action = std::variant<get_action, invoke_action>;
+
+namespace nlohmann {
+template <> struct adl_serializer<action> {
+    static void to_json(json &j, const action &opt) {
+        std::visit([&j](auto &&arg) { j = arg; }, opt);
+    }
+
+    static void from_json(const json &j, action &opt) {
+        if (j["type"] == "get") {
+            opt = j.get<get_action>();
+        } else if (j["type"] == "invoke") {
+            opt = j.get<invoke_action>();
+        } else {
+            std::cerr << "Unknown action type: " << j["type"] << std::endl;
+        }
+    }
+};
+} // namespace nlohmann
 
 struct test_module {
     std::string type;
@@ -124,17 +183,17 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(test_unlinkable, type, line, filename, text,
 struct test_register {
     std::string type;
     int line;
-    std::optional<std::string> name;
+    std::string name;
     std::string as;
 };
 
 namespace nlohmann {
 template <> struct adl_serializer<test_register> {
     static void to_json(json &j, const test_register &opt) {
-        j = json{{"type", opt.type}, {"line", opt.line}, {"as", opt.as}};
-        if (opt.name) {
-            j["name"] = *opt.name;
-        }
+        j = json{{"type", opt.type},
+                 {"line", opt.line},
+                 {"as", opt.as},
+                 {"name", opt.name}};
     }
 
     static void from_json(const json &j, test_register &opt) {
@@ -142,6 +201,8 @@ template <> struct adl_serializer<test_register> {
         opt.line = j["line"];
         if (j.contains("name")) {
             opt.name = j["name"];
+        } else {
+            opt.name = "default";
         }
         opt.as = j["as"];
     }
@@ -226,6 +287,8 @@ template <> struct adl_serializer<Tests> {
             opt = j.get<test_exhaustion>();
         } else if (j["type"] == "action") {
             opt = j.get<test_action>();
+        } else if (j["type"] == "register") {
+            opt = j.get<test_register>();
         } else {
             std::cerr << "Unknown type: " << j["type"] << std::endl;
         }
@@ -284,14 +347,14 @@ int main(int argv, char **argc) {
 
     std::unordered_map<std::string, std::unique_ptr<mitey::Instance>> instances;
     mitey::Exports spectest{
-        {"global_i32", std::make_shared<mitey::WasmGlobal>(mitey::valtype::i32,
-                                                           mitey::mut::var, 0)},
-        {"global_i64", std::make_shared<mitey::WasmGlobal>(mitey::valtype::i64,
-                                                           mitey::mut::var, 0)},
-        {"global_f32", std::make_shared<mitey::WasmGlobal>(mitey::valtype::f32,
-                                                           mitey::mut::var, 0)},
-        {"global_f64", std::make_shared<mitey::WasmGlobal>(mitey::valtype::f64,
-                                                           mitey::mut::var, 0)},
+        {"global_i32", std::make_shared<mitey::WasmGlobal>(
+                           mitey::valtype::i32, mitey::mut::const_, 0)},
+        {"global_i64", std::make_shared<mitey::WasmGlobal>(
+                           mitey::valtype::i64, mitey::mut::const_, 0)},
+        {"global_f32", std::make_shared<mitey::WasmGlobal>(
+                           mitey::valtype::f32, mitey::mut::const_, 0)},
+        {"global_f64", std::make_shared<mitey::WasmGlobal>(
+                           mitey::valtype::f64, mitey::mut::const_, 0)},
         {"table",
          std::make_shared<mitey::WasmTable>(mitey::valtype::funcref, 10, 20)},
         {"memory", std::make_shared<mitey::WasmMemory>(1, 2)},
@@ -327,6 +390,23 @@ int main(int argv, char **argc) {
 
     mitey::Imports imports{{"spectest", spectest}};
 
+    auto execute_action = [&](const action &a) {
+        if (std::holds_alternative<get_action>(a)) {
+            auto &action = std::get<get_action>(a);
+            return std::vector{
+                std::get<std::shared_ptr<mitey::WasmGlobal>>(
+                    instances[action.module]->get_exports().at(action.field))
+                    ->value};
+        } else if (std::holds_alternative<invoke_action>(a)) {
+            auto &action = std::get<invoke_action>(a);
+            return std::get<mitey::FunctionInfo>(
+                       instances[action.module]->get_exports().at(action.field))
+                .to()(to_wasm_values(action.args));
+        } else {
+            throw std::runtime_error("Unknown action type");
+        }
+    };
+
     for (auto &t : wast.commands) {
         nlohmann::json j = t;
         std::cerr << "Running test: " << j << std::endl;
@@ -334,6 +414,8 @@ int main(int argv, char **argc) {
         if (std::holds_alternative<test_module>(t)) {
             auto &m = std::get<test_module>(t);
             instances[m.name] =
+                from_file(resolve_relative(filename, m.filename), imports);
+            instances["default"] =
                 from_file(resolve_relative(filename, m.filename), imports);
         } else if (std::holds_alternative<test_malformed>(t)) {
             auto &m = std::get<test_malformed>(t);
@@ -359,11 +441,7 @@ int main(int argv, char **argc) {
         } else if (std::holds_alternative<test_return>(t)) {
             auto &m = std::get<test_return>(t);
 
-            auto variant =
-                instances["default"]->get_exports().at(m.action.field);
-            auto funcinfo = std::get<mitey::FunctionInfo>(variant);
-            auto func = funcinfo.to();
-            auto result = func(to_wasm_values(m.action.args));
+            std::vector<mitey::WasmValue> result = execute_action(m.action);
 
             if (result.size() != m.expected.size()) {
                 std::cerr << "Expected " << m.expected.size()
@@ -430,13 +508,8 @@ int main(int argv, char **argc) {
         } else if (std::holds_alternative<test_trap>(t)) {
             auto &m = std::get<test_trap>(t);
             try {
-                auto result =
-                    std::get<mitey::FunctionInfo>(
-                        instances["default"]->get_exports().at(m.action.field))
-                        .to()(to_wasm_values(m.action.args));
-
-                std::cerr << "Expected trap for action: " << m.action.field
-                          << std::endl;
+                execute_action(m.action);
+                std::cerr << "Expected trap for test" << std::endl;
                 return 1;
             } catch (mitey::trap_error &e) {
                 if (std::string(e.what()) != m.text) {
@@ -445,41 +518,32 @@ int main(int argv, char **argc) {
                     return 1;
                 }
             } catch (std::runtime_error &e) {
-                std::cerr << "Expected trap for action: " << m.action.field
+                std::cerr << "Expected trap for action: " << m.text
                           << " but got: " << e.what() << std::endl;
                 return 1;
             }
         } else if (std::holds_alternative<test_exhaustion>(t)) {
             auto &m = std::get<test_exhaustion>(t);
             try {
-                auto result =
-                    std::get<mitey::FunctionInfo>(
-                        instances["default"]->get_exports().at(m.action.field))
-                        .to()(to_wasm_values(m.action.args));
+                execute_action(m.action);
 
-                std::cerr << "Expected exhaustion for action: "
-                          << m.action.field << std::endl;
+                std::cerr << "Expected exhaustion for test" << std::endl;
                 return 1;
             } catch (mitey::trap_error &e) {
                 if (std::string(e.what()) != m.text) {
-                    std::cerr << "Expected exhaustion: " << m.text
+                    std::cerr << "Expected message: " << m.text
                               << " but got: " << e.what() << std::endl;
                     return 1;
                 }
             } catch (std::runtime_error &e) {
-                std::cerr << "Expected exhaustion for action: "
-                          << m.action.field << " but got: " << e.what()
-                          << std::endl;
+                std::cerr << "Expected exhaustion error: " << m.text
+                          << " but got: " << e.what() << std::endl;
                 return 1;
             }
         } else if (std::holds_alternative<test_action>(t)) {
             auto &m = std::get<test_action>(t);
             assert(m.expected.size() == 0);
-
-            auto result =
-                std::get<mitey::FunctionInfo>(
-                    instances["default"]->get_exports().at(m.action.field))
-                    .to()(to_wasm_values(m.action.args));
+            execute_action(m.action);
         } else if (std::holds_alternative<test_unlinkable>(t)) {
             auto &m = std::get<test_unlinkable>(t);
             try {
@@ -501,11 +565,7 @@ int main(int argv, char **argc) {
             }
         } else if (std::holds_alternative<test_register>(t)) {
             auto &m = std::get<test_register>(t);
-            if (m.name) {
-                imports[m.as] = instances[*m.name]->get_exports();
-            } else {
-                imports[m.as] = instances["default"]->get_exports();
-            }
+            imports[m.as] = instances[m.name]->get_exports();
         } else {
             std::cerr << "Unhandled std::variant type" << std::endl;
         }
