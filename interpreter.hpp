@@ -34,6 +34,8 @@ union WasmValue {
     Funcref funcref;
     Externref externref;
 
+    WasmValue() : u64(0) {}
+
     WasmValue(int32_t i32) : i32(i32) {}
     WasmValue(uint32_t u32) : u32(u32) {}
     WasmValue(int64_t i64) : i64(i64) {}
@@ -198,11 +200,11 @@ dynamic_host_function wasm_functionify(std::function<F> func) {
 }
 
 struct FunctionInfo {
-    uint8_t *start;
+    uint8_t *start = nullptr;
     Signature type;
     std::vector<valtype> locals;
-    static_host_function *static_fn;
-    dynamic_host_function dyn_fn;
+    static_host_function *static_fn = nullptr;
+    dynamic_host_function dyn_fn = nullptr;
 
     FunctionInfo() = default;
 
@@ -214,6 +216,101 @@ struct FunctionInfo {
 
     FunctionInfo(static_host_function *fn, Signature type)
         : type(type), dyn_fn(fn) {}
+
+    template <typename FunctionType> std::function<FunctionType> to() const {
+        using Traits = function_traits<FunctionType>;
+        using ReturnType = typename Traits::return_type;
+        constexpr size_t num_args = std::tuple_size_v<typename Traits::args>;
+
+        if (start) {
+            trap("non-exported wasm functions cannot be called from the host");
+        }
+        if (!static_fn && !dyn_fn) {
+            trap("function has no implementation");
+        }
+        if (static_fn && dyn_fn) {
+            trap("function has both static and dynamic implementations");
+        }
+
+        bool call_static = static_fn != nullptr;
+
+        return [this, call_static](auto... args) {
+            if constexpr (std::is_void_v<ReturnType>) {
+                WasmValue *stack = reinterpret_cast<WasmValue *>(
+                    alloca(sizeof(WasmValue) * num_args));
+                push_tuple_to_wasm(std::make_tuple(args...), stack,
+                                   std::make_index_sequence<sizeof...(args)>{});
+
+                if (call_static) {
+                    static_fn(stack);
+                } else {
+                    dyn_fn(stack);
+                }
+            } else if constexpr (is_specialization_of<std::tuple, ReturnType>) {
+                constexpr size_t num_results = std::tuple_size_v<ReturnType>;
+
+                WasmValue *stack = reinterpret_cast<WasmValue *>(alloca(
+                    sizeof(WasmValue) * std::max(num_args, num_results)));
+                push_tuple_to_wasm(std::make_tuple(args...), stack,
+                                   std::make_index_sequence<sizeof...(args)>{});
+                if (call_static) {
+                    static_fn(stack);
+                } else {
+                    dyn_fn(stack);
+                }
+                return [&]<size_t... I>(std::index_sequence<I...>) {
+                    return ReturnType{(stack[I])...};
+                }(std::make_index_sequence<num_results>{});
+            } else {
+                WasmValue *stack = reinterpret_cast<WasmValue *>(
+                    alloca(sizeof(WasmValue) * num_args));
+                push_tuple_to_wasm(std::make_tuple(args...), stack,
+                                   std::make_index_sequence<sizeof...(args)>{});
+                if (call_static) {
+                    static_fn(stack);
+                } else {
+                    dyn_fn(stack);
+                }
+                return stack[0];
+            }
+        };
+    }
+
+    std::function<std::vector<WasmValue>(const std::vector<WasmValue> &)>
+    to() const {
+        if (start) {
+            trap("non-exported wasm functions cannot be called from the host");
+        }
+        if (!static_fn && !dyn_fn) {
+            trap("function has no implementation");
+        }
+        if (static_fn && dyn_fn) {
+            trap("function has both static and dynamic implementations");
+        }
+
+        bool call_static = static_fn != nullptr;
+
+        return [this, call_static](const std::vector<WasmValue> &args) {
+            if (args.size() != type.params.size()) {
+                trap("invalid number of arguments");
+            }
+
+            // todo: this should absolutely not be a dynamic allocation but
+            // alloca was throwing some shit
+            auto stack = static_cast<WasmValue *>(
+                alloca(sizeof(WasmValue) *
+                       std::max(args.size(), type.results.size())));
+            std::copy(args.begin(), args.end(), stack);
+
+            if (call_static) {
+                static_fn(stack);
+            } else {
+                dyn_fn(stack);
+            }
+
+            return std::vector<WasmValue>(stack, stack + type.results.size());
+        };
+    }
 };
 
 struct BrTarget {

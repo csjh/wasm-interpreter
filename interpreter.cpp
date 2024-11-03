@@ -483,7 +483,9 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
                     throw validation_error("invalid function index");
                 }
                 const auto &fn = functions[idx];
-                if (fn.start != nullptr) {
+                if (fn.static_fn || fn.dyn_fn) {
+                    exports[name] = fn;
+                } else {
                     exports[name] = FunctionInfo(
                         [&](WasmValue *extern_stack) {
                             const auto &type = fn.type;
@@ -492,16 +494,20 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
                                 *stack++ = extern_stack[i];
                             }
 
-                            call_function_info(fn, nullptr,
-                                               [&] { interpret(fn.start); });
+                            try {
+                                call_function_info(
+                                    fn, nullptr, [&] { interpret(fn.start); });
+                            } catch (trap_error &e) {
+                                stack = stack_start;
+                                frames.clear();
+                                throw;
+                            }
 
                             for (uint32_t i = 0; i < type.results.size(); i++) {
                                 extern_stack[i] = *--stack;
                             }
                         },
                         fn.type);
-                } else {
-                    exports[name] = fn;
                 }
             } else if (export_desc == ExportDesc::table) {
                 if (idx >= tables.size()) {
