@@ -25,6 +25,12 @@ class link_error : public std::runtime_error {
     link_error(const std::string &message) : std::runtime_error(message) {}
 };
 
+class uninstantiable_error : public std::runtime_error {
+  public:
+    uninstantiable_error(const std::string &message)
+        : std::runtime_error(message) {}
+};
+
 enum class valtype : uint8_t {
     empty = 0x40,
 

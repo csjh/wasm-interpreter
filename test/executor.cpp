@@ -260,9 +260,20 @@ struct test_exhaustion {
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(test_exhaustion, type, line, action, text,
                                    expected)
 
+struct test_uninstantiable {
+    std::string type;
+    int line;
+    std::string filename;
+    std::string text;
+    std::string module_type;
+};
+
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(test_uninstantiable, type, line, filename,
+                                   text, module_type)
+
 using Tests = std::variant<test_module, test_malformed, test_unlinkable,
                            test_return, test_action, test_invalid, test_trap,
-                           test_exhaustion, test_register>;
+                           test_exhaustion, test_register, test_uninstantiable>;
 
 namespace nlohmann {
 template <> struct adl_serializer<Tests> {
@@ -289,6 +300,8 @@ template <> struct adl_serializer<Tests> {
             opt = j.get<test_action>();
         } else if (j["type"] == "register") {
             opt = j.get<test_register>();
+        } else if (j["type"] == "assert_uninstantiable") {
+            opt = j.get<test_uninstantiable>();
         } else {
             std::cerr << "Unknown type: " << j["type"] << std::endl;
         }
@@ -386,7 +399,21 @@ int main(int argv, char **argc) {
                               std::cout << "spectest print_f64: " << args[0].f64
                                         << std::endl;
                           },
-                          {{mitey::valtype::f64}, {}})}};
+                          {{mitey::valtype::f64}, {}})},
+        {"print_i32_f32",
+         mitey::FunctionInfo(
+             [&](mitey::WasmValue *args) {
+                 std::cout << "spectest print_i32_f32: " << args[0].i32 << " "
+                           << args[1].f32 << std::endl;
+             },
+             {{mitey::valtype::i32, mitey::valtype::f32}, {}})},
+        {"print_f64_f64",
+         mitey::FunctionInfo(
+             [&](mitey::WasmValue *args) {
+                 std::cout << "spectest print_f64_f64: " << args[0].f64 << " "
+                           << args[1].f64 << std::endl;
+             },
+             {{mitey::valtype::f64, mitey::valtype::f64}, {}})}};
 
     mitey::Imports imports{{"spectest", spectest}};
 
@@ -561,6 +588,25 @@ int main(int argv, char **argc) {
             } catch (std::runtime_error &e) {
                 std::cerr << "Expected link error with message: " << m.text
                           << " but got: " << e.what() << std::endl;
+                return 1;
+            }
+        } else if (std::holds_alternative<test_uninstantiable>(t)) {
+            auto &m = std::get<test_uninstantiable>(t);
+            try {
+                from_file(resolve_relative(filename, m.filename), imports);
+
+                std::cerr << "Expected uninstantiable error for file: "
+                          << m.filename << std::endl;
+                return 1;
+            } catch (mitey::uninstantiable_error &e) {
+                if (std::string(e.what()) != m.text) {
+                    std::cerr << "Expected error message: " << m.text
+                              << " but got: " << e.what() << std::endl;
+                    return 1;
+                }
+            } catch (std::runtime_error &e) {
+                std::cerr << "Expected uninstantiable error with message: "
+                          << m.text << " but got: " << e.what() << std::endl;
                 return 1;
             }
         } else if (std::holds_alternative<test_register>(t)) {

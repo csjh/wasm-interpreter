@@ -584,7 +584,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
                             uint32_t elem_idx =
                                 safe_read_leb128<uint32_t>(iter);
                             if (elem_idx >= functions.size()) {
-                                throw validation_error("invalid element index");
+                                throw validation_error("unknown function");
                             }
                         }
                     }
@@ -617,7 +617,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
                             uint32_t elem_idx =
                                 safe_read_leb128<uint32_t>(iter);
                             if (elem_idx >= functions.size()) {
-                                throw validation_error("invalid element index");
+                                throw validation_error("unknown function");
                             }
                             elem.push_back(
                                 Funcref{functions[elem_idx].type.typeidx, true,
@@ -629,11 +629,14 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
             } else {
                 uint32_t table_idx =
                     flags & 0b10 ? safe_read_leb128<uint32_t>(iter) : 0;
+                if (table_idx >= tables.size()) {
+                    throw validation_error("unknown table");
+                }
 
                 uint32_t offset = interpret_const(iter, valtype::i32).u32;
                 uint32_t n_elements = safe_read_leb128<uint32_t>(iter);
                 if (offset + n_elements > tables[table_idx]->size()) {
-                    throw validation_error("invalid table offset");
+                    throw link_error("elements segment does not fit");
                 }
 
                 std::vector<WasmValue> elem{n_elements};
@@ -650,6 +653,9 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
                         WasmValue el = interpret_const(
                             iter, static_cast<valtype>(reftype));
                         elem.push_back(el);
+                        if (offset + j >= tables[table_idx]->size()) {
+                            throw link_error("elements segment does not fit");
+                        }
                         tables[table_idx]->set(offset + j, el);
                     }
                 } else {
@@ -664,11 +670,14 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
                     for (uint32_t j = 0; j < n_elements; j++) {
                         uint32_t elem_idx = safe_read_leb128<uint32_t>(iter);
                         if (elem_idx >= functions.size()) {
-                            throw validation_error("invalid element index");
+                            throw validation_error("unknown function");
                         }
                         WasmValue funcref = Funcref{
                             functions[elem_idx].type.typeidx, true, elem_idx};
                         elem.push_back(funcref);
+                        if (offset + j >= tables[table_idx]->size()) {
+                            throw link_error("elements segment does not fit");
+                        }
                         tables[table_idx]->set(offset + j, funcref);
                     }
                 }
@@ -785,12 +794,13 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
             } else {
                 // active segment
 
-                uint32_t offset = interpret_const(iter, valtype::i32).u32;
-                uint32_t data_length = safe_read_leb128<uint32_t>(iter);
-
+                // larger data type to account for potential addition overflow
+                uint64_t offset = interpret_const(iter, valtype::i32).u32;
+                uint64_t data_length = safe_read_leb128<uint32_t>(iter);
                 if (offset + data_length >
-                    memory->size() * WasmMemory::PAGE_SIZE) {
-                    throw validation_error("invalid memory offset");
+                    memory->size() *
+                        static_cast<uint64_t>(WasmMemory::PAGE_SIZE)) {
+                    throw link_error("data segment does not fit");
                 }
                 if (!iter.has_n_left(data_length)) {
                     throw malformed_error(
@@ -824,8 +834,8 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
         }
         try {
             call_function_info(fn, nullptr, [&] { interpret(fn.start); });
-        } catch (const trap_error &) {
-            throw validation_error("start function trapped");
+        } catch (const trap_error &e) {
+            throw uninstantiable_error(e.what());
         }
     }
 }
