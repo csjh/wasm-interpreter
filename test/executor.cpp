@@ -90,7 +90,7 @@ template <> struct adl_serializer<test_module> {
         opt.type = j["type"];
         opt.line = j["line"];
         opt.filename = j["filename"];
-        if (j["name"].is_string()) {
+        if (j.contains("name")) {
             opt.name = j["name"];
         } else {
             opt.name = "default";
@@ -140,7 +140,7 @@ template <> struct adl_serializer<test_register> {
     static void from_json(const json &j, test_register &opt) {
         opt.type = j["type"];
         opt.line = j["line"];
-        if (j["name"].is_string()) {
+        if (j.contains("name")) {
             opt.name = j["name"];
         }
         opt.as = j["as"];
@@ -240,7 +240,8 @@ struct wastjson {
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(wastjson, source_filename, commands)
 
-std::unique_ptr<mitey::Instance> from_file(const std::string &filename) {
+std::unique_ptr<mitey::Instance> from_file(const std::string &filename,
+                                           const mitey::Imports &imports) {
     std::ifstream wasm_file{filename, std::ios::binary};
     if (!wasm_file) {
         throw std::system_error(errno, std::system_category(), filename);
@@ -257,7 +258,7 @@ std::unique_ptr<mitey::Instance> from_file(const std::string &filename) {
     wasm_file.read(reinterpret_cast<char *>(bytes.get()), length);
     wasm_file.close();
 
-    return std::make_unique<mitey::Instance>(std::move(bytes), length);
+    return std::make_unique<mitey::Instance>(std::move(bytes), length, imports);
 }
 
 namespace fs = std::filesystem;
@@ -282,7 +283,50 @@ int main(int argv, char **argc) {
     auto wast = j.template get<wastjson>();
 
     std::unordered_map<std::string, std::unique_ptr<mitey::Instance>> instances;
-    mitey::Imports imports;
+    mitey::Exports spectest{
+        {"global_i32", std::make_shared<mitey::WasmGlobal>(mitey::valtype::i32,
+                                                           mitey::mut::var, 0)},
+        {"global_i64", std::make_shared<mitey::WasmGlobal>(mitey::valtype::i64,
+                                                           mitey::mut::var, 0)},
+        {"global_f32", std::make_shared<mitey::WasmGlobal>(mitey::valtype::f32,
+                                                           mitey::mut::var, 0)},
+        {"global_f64", std::make_shared<mitey::WasmGlobal>(mitey::valtype::f64,
+                                                           mitey::mut::var, 0)},
+        {"table",
+         std::make_shared<mitey::WasmTable>(mitey::valtype::funcref, 10, 20)},
+        {"memory", std::make_shared<mitey::WasmMemory>(1, 2)},
+        {"print", mitey::FunctionInfo(
+                      [&](mitey::WasmValue *) {
+                          std::cout << "spectest print" << std::endl;
+                      },
+                      {{}, {}})},
+        {"print_i32", mitey::FunctionInfo(
+                          [&](mitey::WasmValue *args) {
+                              std::cout << "spectest print_i32: " << args[0].i32
+                                        << std::endl;
+                          },
+                          {{mitey::valtype::i32}, {}})},
+        {"print_i64", mitey::FunctionInfo(
+                          [&](mitey::WasmValue *args) {
+                              std::cout << "spectest print_i64: " << args[0].i64
+                                        << std::endl;
+                          },
+                          {{mitey::valtype::i64}, {}})},
+        {"print_f32", mitey::FunctionInfo(
+                          [&](mitey::WasmValue *args) {
+                              std::cout << "spectest print_f32: " << args[0].f32
+                                        << std::endl;
+                          },
+                          {{mitey::valtype::f32}, {}})},
+        {"print_f64", mitey::FunctionInfo(
+                          [&](mitey::WasmValue *args) {
+                              std::cout << "spectest print_f64: " << args[0].f64
+                                        << std::endl;
+                          },
+                          {{mitey::valtype::f64}, {}})}};
+
+    mitey::Imports imports{{"spectest", spectest}};
+
     for (auto &t : wast.commands) {
         nlohmann::json j = t;
         std::cerr << "Running test: " << j << std::endl;
@@ -290,13 +334,13 @@ int main(int argv, char **argc) {
         if (std::holds_alternative<test_module>(t)) {
             auto &m = std::get<test_module>(t);
             instances[m.name] =
-                from_file(resolve_relative(filename, m.filename));
+                from_file(resolve_relative(filename, m.filename), imports);
         } else if (std::holds_alternative<test_malformed>(t)) {
             auto &m = std::get<test_malformed>(t);
             if (m.filename.ends_with(".wat"))
                 continue;
             try {
-                from_file(resolve_relative(filename, m.filename));
+                from_file(resolve_relative(filename, m.filename), imports);
 
                 std::cerr << "Expected malformed error for file: " << m.filename
                           << std::endl;
@@ -315,8 +359,11 @@ int main(int argv, char **argc) {
         } else if (std::holds_alternative<test_return>(t)) {
             auto &m = std::get<test_return>(t);
 
-            auto result = instances["default"]->execute(
-                m.action.field, to_wasm_values(m.action.args));
+            auto variant =
+                instances["default"]->get_exports().at(m.action.field);
+            auto funcinfo = std::get<mitey::FunctionInfo>(variant);
+            auto func = funcinfo.to();
+            auto result = func(to_wasm_values(m.action.args));
 
             if (result.size() != m.expected.size()) {
                 std::cerr << "Expected " << m.expected.size()
@@ -364,7 +411,7 @@ int main(int argv, char **argc) {
         } else if (std::holds_alternative<test_invalid>(t)) {
             auto &m = std::get<test_invalid>(t);
             try {
-                from_file(resolve_relative(filename, m.filename));
+                from_file(resolve_relative(filename, m.filename), imports);
 
                 std::cerr << "Expected validation error for file: "
                           << m.filename << std::endl;
@@ -383,8 +430,10 @@ int main(int argv, char **argc) {
         } else if (std::holds_alternative<test_trap>(t)) {
             auto &m = std::get<test_trap>(t);
             try {
-                auto result = instances["default"]->execute(
-                    m.action.field, to_wasm_values(m.action.args));
+                auto result =
+                    std::get<mitey::FunctionInfo>(
+                        instances["default"]->get_exports().at(m.action.field))
+                        .to()(to_wasm_values(m.action.args));
 
                 std::cerr << "Expected trap for action: " << m.action.field
                           << std::endl;
@@ -403,8 +452,10 @@ int main(int argv, char **argc) {
         } else if (std::holds_alternative<test_exhaustion>(t)) {
             auto &m = std::get<test_exhaustion>(t);
             try {
-                auto result = instances["default"]->execute(
-                    m.action.field, to_wasm_values(m.action.args));
+                auto result =
+                    std::get<mitey::FunctionInfo>(
+                        instances["default"]->get_exports().at(m.action.field))
+                        .to()(to_wasm_values(m.action.args));
 
                 std::cerr << "Expected exhaustion for action: "
                           << m.action.field << std::endl;
@@ -425,12 +476,14 @@ int main(int argv, char **argc) {
             auto &m = std::get<test_action>(t);
             assert(m.expected.size() == 0);
 
-            auto result = instances["default"]->execute(
-                m.action.field, to_wasm_values(m.action.args));
+            auto result =
+                std::get<mitey::FunctionInfo>(
+                    instances["default"]->get_exports().at(m.action.field))
+                    .to()(to_wasm_values(m.action.args));
         } else if (std::holds_alternative<test_unlinkable>(t)) {
             auto &m = std::get<test_unlinkable>(t);
             try {
-                from_file(resolve_relative(filename, m.filename));
+                from_file(resolve_relative(filename, m.filename), imports);
 
                 std::cerr << "Expected link error for file: " << m.filename
                           << std::endl;
