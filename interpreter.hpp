@@ -384,16 +384,6 @@ using Exports = std::unordered_map<std::string, ExportValue>;
 using ModuleImports = std::unordered_map<std::string, ExportValue>;
 using Imports = std::unordered_map<std::string, ModuleImports>;
 
-template <size_t N> struct string_literal {
-    constexpr string_literal(const char (&str)[N]) {
-        std::copy_n(str, N, value);
-    }
-    char value[N];
-    static constexpr size_t size = N - 1;
-};
-
-template <size_t N> string_literal(const char (&)[N]) -> string_literal<N>;
-
 class Instance {
     friend class Validator;
 
