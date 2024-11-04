@@ -443,6 +443,8 @@ class Instance {
                                    std::function<void()> wasm_call);
     void interpret(uint8_t *iter);
 
+    void entrypoint(const FunctionInfo &);
+
     WasmValue interpret_const(safe_byte_iterator &iter, valtype expected);
 
     StackFrame &frame() { return frames.back(); }

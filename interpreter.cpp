@@ -833,7 +833,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
             throw validation_error("start function");
         }
         try {
-            call_function_info(fn, nullptr, [&] { interpret(fn.start); });
+            entrypoint(fn);
         } catch (const trap_error &e) {
             throw uninstantiable_error(e.what());
         }
@@ -853,20 +853,23 @@ FunctionInfo Instance::externalize_function(const FunctionInfo &fn) {
                     *stack++ = extern_stack[i];
                 }
 
-                try {
-                    call_function_info(fn, nullptr,
-                                       [&] { interpret(fn.start); });
-                } catch (trap_error &e) {
-                    stack = stack_start;
-                    frames.clear();
-                    throw;
-                }
+                entrypoint(fn);
 
                 for (uint32_t i = 0; i < type.results.size(); i++) {
                     extern_stack[i] = *--stack;
                 }
             },
             fn.type);
+    }
+}
+
+void Instance::entrypoint(const FunctionInfo &fn) {
+    try {
+        call_function_info(fn, nullptr, [&] { interpret(fn.start); });
+    } catch (const trap_error &e) {
+        stack = stack_start;
+        frames.clear();
+        throw;
     }
 }
 
