@@ -15,12 +15,15 @@ namespace mitey {
     throw trap_error(message);
 }
 
-struct Funcref {
+class Instance;
+
+struct IndirectFunction {
+    Instance *instance;
+    uint32_t funcidx;
     uint32_t typeidx;
-    bool nonnull : 1;
-    uint32_t funcidx : 31;
 };
 
+using Funcref = IndirectFunction *;
 using Externref = void *;
 
 // technically unsigned versions don't exist but easier to use if they're here
@@ -404,6 +407,8 @@ class Instance {
     std::vector<StackFrame> frames;
     // function info
     std::vector<FunctionInfo> functions;
+    // funcrefs corresponding to the above functions
+    std::vector<IndirectFunction> funcrefs;
     // locations of if else/end instructions
     std::unordered_map<uint8_t *, IfJump> if_jumps;
     // locations of block end instructions

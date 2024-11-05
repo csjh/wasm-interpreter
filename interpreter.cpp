@@ -395,6 +395,11 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
         }
     });
 
+    for (uint32_t i = 0; i < functions.size(); i++) {
+        funcrefs.push_back(
+            IndirectFunction{this, i, functions[i].type.typeidx});
+    }
+
     skip_custom_section();
 
     // table section
@@ -619,9 +624,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
                             if (elem_idx >= functions.size()) {
                                 throw validation_error("unknown function");
                             }
-                            elem.push_back(
-                                Funcref{functions[elem_idx].type.typeidx, true,
-                                        elem_idx});
+                            elem.push_back(&funcrefs[elem_idx]);
                         }
                         elements.emplace_back(elem);
                     }
@@ -672,8 +675,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
                         if (elem_idx >= functions.size()) {
                             throw validation_error("unknown function");
                         }
-                        WasmValue funcref = Funcref{
-                            functions[elem_idx].type.typeidx, true, elem_idx};
+                        WasmValue funcref = &funcrefs[elem_idx];
                         elem.push_back(funcref);
                         if (offset + j >= tables[table_idx]->size()) {
                             throw link_error("elements segment does not fit");
@@ -993,7 +995,7 @@ WasmValue Instance::interpret_const(safe_byte_iterator &iter,
         case i64mul:
             I64_OP(*);
         case ref_null: {
-            *stack++ = nullptr;
+            *stack++ = (void *)nullptr;
             uint32_t reftype = safe_read_leb128<uint32_t>(iter);
             if (!is_reftype(reftype)) {
                 throw validation_error("invalid reference type");
@@ -1006,8 +1008,7 @@ WasmValue Instance::interpret_const(safe_byte_iterator &iter,
             if (func_idx >= functions.size()) {
                 throw validation_error("unknown function");
             }
-            *stack++ =
-                Funcref{functions[func_idx].type.typeidx, true, func_idx};
+            *stack++ = &funcrefs[func_idx];
             stack_types.push_back(valtype::funcref);
             break;
         }
@@ -1271,14 +1272,20 @@ void Instance::interpret(uint8_t *iter) {
             uint32_t elem_idx = pop().u32;
 
             Funcref funcref = tables[table_idx]->get(elem_idx);
-            if (!funcref.nonnull) {
+            if (!funcref) {
                 trap("uninitialized element");
             }
-            if (funcref.typeidx != types[type_idx].typeidx) {
+            if (funcref->typeidx != types[type_idx].typeidx) {
                 trap("indirect call type mismatch");
             }
-            FunctionInfo &fn = functions[funcref.funcidx];
-            call_function_info(fn, iter, [&] { iter = fn.start; });
+            Instance &callee = *funcref->instance;
+            FunctionInfo &fn = callee.functions[funcref->funcidx];
+            // todo: need to account for back and forth cross-instance calls,
+            // callstack wouldn't be empty
+
+            // callee.stack = thisstack
+            // callee.frames = thisstack?
+            callee.entrypoint(fn);
             break;
         }
         case drop:
@@ -1488,7 +1495,7 @@ void Instance::interpret(uint8_t *iter) {
         case f64reinterpret_i64: /* push(pop().f64); */ break;
         case ref_null: {
             read_leb128(iter);
-            push(nullptr);
+            push((void*)nullptr);
             break;
         }
         case ref_is_null: {
@@ -1501,7 +1508,7 @@ void Instance::interpret(uint8_t *iter) {
             if (func_idx >= functions.size()) {
                 trap("unknown function");
             }
-            push(Funcref{functions[func_idx].type.typeidx, true, func_idx});
+            push(&funcrefs[func_idx]);
             break;
         }
         // bitwise comparison applies to both
