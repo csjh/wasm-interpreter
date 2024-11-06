@@ -365,7 +365,7 @@ class safe_byte_iterator {
     safe_byte_iterator(uint8_t *begin, uint8_t *end);
 
     uint8_t operator*() const;
-    uint8_t operator[](size_t n) const;
+    uint8_t operator[](ssize_t n) const;
     safe_byte_iterator &operator++();
     safe_byte_iterator operator++(int);
     safe_byte_iterator operator+(size_t n) const;

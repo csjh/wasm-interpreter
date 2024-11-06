@@ -21,7 +21,7 @@ uint8_t safe_byte_iterator::operator*() const {
     return *iter;
 }
 
-uint8_t safe_byte_iterator::operator[](size_t n) const {
+uint8_t safe_byte_iterator::operator[](ssize_t n) const {
     if (iter + n >= end) {
         throw malformed_error("unexpected end");
     }
@@ -991,18 +991,24 @@ WasmValue Instance::interpret_const(safe_byte_iterator &iter,
             stack.push(safe_read_sleb128<int64_t>(iter));
             stack_types.push_back(valtype::i64);
             break;
-        case f32const:
-            stack.push(*reinterpret_cast<float *>(
-                iter.get_with_at_least(sizeof(float))));
+        case f32const: {
+            float x;
+            std::memcpy(&x, iter.get_with_at_least(sizeof(float)),
+                        sizeof(float));
+            stack.push(x);
             iter += sizeof(float);
             stack_types.push_back(valtype::f32);
             break;
-        case f64const:
-            stack.push(*reinterpret_cast<double *>(
-                iter.get_with_at_least(sizeof(double))));
+        }
+        case f64const: {
+            double x;
+            std::memcpy(&x, iter.get_with_at_least(sizeof(double)),
+                        sizeof(double));
+            stack.push(x);
             iter += sizeof(double);
             stack_types.push_back(valtype::f64);
             break;
+        }
         case globalget: {
             uint32_t global_idx = safe_read_leb128<uint32_t>(iter);
             if (global_idx >= globals.size()) {
@@ -1148,7 +1154,13 @@ void Instance::interpret(uint8_t *iter, tape<WasmValue> &stack) {
         if (stack[0].type == 0) {                                              \
             trap("integer divide by zero");                                    \
         }                                                                      \
-        stack[-1] = stack[-1].type % stack[0].type;                            \
+        if (std::is_signed_v<type> &&                                          \
+            stack[0].type == static_cast<type>(-1) &&                          \
+            stack[-1].type == std::numeric_limits<type>::min()) [[unlikely]] { \
+            stack[-1] = static_cast<type>(0);                                  \
+        } else {                                                               \
+            stack[-1] = stack[-1].type % stack[0].type;                        \
+        }                                                                      \
         break;                                                                 \
     }
 #define MINMAX(type, fn)                                                       \
@@ -1355,14 +1367,19 @@ void Instance::interpret(uint8_t *iter, tape<WasmValue> &stack) {
             stack.push((int64_t)read_sleb128<64>(iter));
             break;
         case f32const: {
-            stack.push(*reinterpret_cast<float *>(iter));
+            float x;
+            std::memcpy(&x, iter, sizeof(float));
+            stack.push(x);
             iter += sizeof(float);
             break;
         }
-        case f64const:
-            stack.push(*reinterpret_cast<double *>(iter));
+        case f64const: {
+            double x;
+            std::memcpy(&x, iter, sizeof(double));
+            stack.push(x);
             iter += sizeof(double);
             break;
+        }
         // clang-format off
         case i32load:      LOAD(u32, uint32_t);
         case i64load:      LOAD(u64, uint64_t);
@@ -1427,12 +1444,12 @@ void Instance::interpret(uint8_t *iter, tape<WasmValue> &stack) {
         case i64ctz:       UNARY_FN (u64, (uint64_t)std::countr_zero);
         case i32popcnt:    UNARY_FN (u32, std::popcount);
         case i64popcnt:    UNARY_FN (u64, (uint64_t)std::popcount);
-        case i32add:       BINARY_OP(i32, + );
-        case i64add:       BINARY_OP(i64, + );
-        case i32sub:       BINARY_OP(i32, - );
-        case i64sub:       BINARY_OP(i64, - );
-        case i32mul:       BINARY_OP(i32, * );
-        case i64mul:       BINARY_OP(i64, * );
+        case i32add:       BINARY_OP(u32, + );
+        case i64add:       BINARY_OP(u64, + );
+        case i32sub:       BINARY_OP(u32, - );
+        case i64sub:       BINARY_OP(u64, - );
+        case i32mul:       BINARY_OP(u32, * );
+        case i64mul:       BINARY_OP(u64, * );
         case i32div_s:     IDIV     (i32);
         case i64div_s:     IDIV     (i64);
         case i32div_u:     IDIV     (u32);
