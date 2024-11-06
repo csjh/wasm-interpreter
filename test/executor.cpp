@@ -358,16 +358,16 @@ int main(int argv, char **argc) {
 
     auto wast = j.template get<wastjson>();
 
-    std::unordered_map<std::string, std::unique_ptr<mitey::Instance>> instances;
+    std::unordered_map<std::string, std::shared_ptr<mitey::Instance>> instances;
     mitey::Exports spectest{
         {"global_i32", std::make_shared<mitey::WasmGlobal>(
-                           mitey::valtype::i32, mitey::mut::const_, 0)},
+                           mitey::valtype::i32, mitey::mut::const_, 666u)},
         {"global_i64", std::make_shared<mitey::WasmGlobal>(
-                           mitey::valtype::i64, mitey::mut::const_, 0)},
+                           mitey::valtype::i64, mitey::mut::const_, 666ull)},
         {"global_f32", std::make_shared<mitey::WasmGlobal>(
-                           mitey::valtype::f32, mitey::mut::const_, 0)},
+                           mitey::valtype::f32, mitey::mut::const_, 666.6f)},
         {"global_f64", std::make_shared<mitey::WasmGlobal>(
-                           mitey::valtype::f64, mitey::mut::const_, 0)},
+                           mitey::valtype::f64, mitey::mut::const_, 666.6)},
         {"table",
          std::make_shared<mitey::WasmTable>(mitey::valtype::funcref, 10, 20)},
         {"memory", std::make_shared<mitey::WasmMemory>(1, 2)},
