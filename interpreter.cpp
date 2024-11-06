@@ -135,7 +135,12 @@ std::tuple<uint32_t, uint32_t> get_table_limits(safe_byte_iterator &iter) {
 Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
                    uint32_t length, const Imports &imports)
     : bytes(std::move(_bytes)),
-      stack(static_cast<WasmValue *>(malloc(stack_size))), stack_start(stack) {
+      initial_stack(static_cast<WasmValue *>(malloc(STACK_SIZE)), STACK_SIZE),
+      frames(static_cast<StackFrame *>(malloc(sizeof(StackFrame) * MAX_DEPTH)),
+             MAX_DEPTH),
+      control_stack(
+          static_cast<BrTarget *>(malloc(sizeof(BrTarget) * MAX_DEPTH)),
+          MAX_DEPTH) {
 
     if (length < 4) {
         throw malformed_error("unexpected end");
@@ -861,13 +866,13 @@ FunctionInfo Instance::externalize_function(const FunctionInfo &fn) {
                 const auto &type = fn.type;
 
                 for (uint32_t i = 0; i < type.params.size(); i++) {
-                    *stack++ = extern_stack[i];
+                    initial_stack.push(extern_stack[i]);
                 }
 
                 entrypoint(fn);
 
                 for (uint32_t i = 0; i < type.results.size(); i++) {
-                    extern_stack[i] = *--stack;
+                    extern_stack[i] = initial_stack[i];
                 }
             },
             fn.type);
@@ -913,9 +918,9 @@ inline void Instance::call_function_info(const FunctionInfo &fn,
     } else {
         stack -= fn.type.params.size();
         if (fn.static_fn != nullptr) {
-            fn.static_fn(stack);
+            fn.static_fn(stack.unsafe_ptr());
         } else {
-            fn.dyn_fn(stack);
+            fn.dyn_fn(stack.unsafe_ptr());
         }
         stack += fn.type.results.size();
     }
@@ -925,6 +930,7 @@ inline void Instance::call_function_info(const FunctionInfo &fn,
 // this shoves validation and execution into one for simplicity(?)
 WasmValue Instance::interpret_const(safe_byte_iterator &iter,
                                     valtype expected) {
+    tape<WasmValue> &stack = initial_stack;
     std::vector<valtype> stack_types;
 
 #define OP(ty, op)                                                             \
@@ -939,7 +945,7 @@ WasmValue Instance::interpret_const(safe_byte_iterator &iter,
             throw validation_error("type mismatch");                           \
         }                                                                      \
         stack_types.pop_back();                                                \
-        stack--;                                                               \
+        stack.pop();                                                           \
         stack[-1].ty = stack[-1].ty op stack[0].ty;                            \
         break;                                                                 \
     }
@@ -952,7 +958,7 @@ WasmValue Instance::interpret_const(safe_byte_iterator &iter,
         std::cerr << "reading const instruction " << instructions[byte].c_str()
                   << " at " << iter - bytes.get() << std::endl;
         std::cerr << "stack contents: ";
-        for (WasmValue *p = stack_start; p < stack; ++p) {
+        for (WasmValue *p = stack.get_start(); p < stack.unsafe_ptr(); p++) {
             std::cerr << p->u64 << " ";
         }
         std::cerr << std::endl << std::endl;
@@ -963,22 +969,22 @@ WasmValue Instance::interpret_const(safe_byte_iterator &iter,
         }
         switch (static_cast<Instruction>(byte)) {
         case i32const:
-            *stack++ = safe_read_sleb128<int32_t>(iter);
+            stack.push(safe_read_sleb128<int32_t>(iter));
             stack_types.push_back(valtype::i32);
             break;
         case i64const:
-            *stack++ = safe_read_sleb128<int64_t>(iter);
+            stack.push(safe_read_sleb128<int64_t>(iter));
             stack_types.push_back(valtype::i64);
             break;
         case f32const:
-            *stack++ = *reinterpret_cast<float *>(
-                iter.get_with_at_least(sizeof(float)));
+            stack.push(*reinterpret_cast<float *>(
+                iter.get_with_at_least(sizeof(float))));
             iter += sizeof(float);
             stack_types.push_back(valtype::f32);
             break;
         case f64const:
-            *stack++ = *reinterpret_cast<double *>(
-                iter.get_with_at_least(sizeof(double)));
+            stack.push(*reinterpret_cast<double *>(
+                iter.get_with_at_least(sizeof(double))));
             iter += sizeof(double);
             stack_types.push_back(valtype::f64);
             break;
@@ -987,7 +993,7 @@ WasmValue Instance::interpret_const(safe_byte_iterator &iter,
             if (global_idx >= globals.size()) {
                 throw validation_error("unknown global");
             }
-            *stack++ = globals[global_idx]->value;
+            stack.push(globals[global_idx]->value);
             stack_types.push_back(globals[global_idx]->type);
             break;
         }
@@ -1004,7 +1010,7 @@ WasmValue Instance::interpret_const(safe_byte_iterator &iter,
         case i64mul:
             I64_OP(*);
         case ref_null: {
-            *stack++ = (void *)nullptr;
+            stack.push((void *)nullptr);
             uint32_t reftype = safe_read_leb128<uint32_t>(iter);
             if (!is_reftype(reftype)) {
                 throw validation_error("invalid reference type");
@@ -1017,7 +1023,7 @@ WasmValue Instance::interpret_const(safe_byte_iterator &iter,
             if (func_idx >= functions.size()) {
                 throw validation_error("unknown function");
             }
-            *stack++ = &funcrefs[func_idx];
+            stack.push(&funcrefs[func_idx]);
             stack_types.push_back(valtype::funcref);
             break;
         }
@@ -1030,7 +1036,7 @@ WasmValue Instance::interpret_const(safe_byte_iterator &iter,
 #undef I32_OP
 #undef I64_OP
 
-    if (stack - stack_start != 1 || stack_types.size() != 1 ||
+    if (stack.size() != 1 || stack_types.size() != 1 ||
         stack_types[0] != expected) {
         throw validation_error("type mismatch");
     }
@@ -1039,13 +1045,10 @@ WasmValue Instance::interpret_const(safe_byte_iterator &iter,
     std::cerr << "const expression result: " << stack[-1].u64 << std::endl;
 #endif
 
-    return *--stack;
+    return stack.pop();
 }
 
-void Instance::interpret(uint8_t *iter) {
-    auto push = [&](WasmValue value) { *stack++ = value; };
-    auto pop = [&]() { return *--stack; };
-
+void Instance::interpret(uint8_t *iter, tape<WasmValue> &stack) {
     using i32 = int32_t;
     using u32 = uint32_t;
     using i64 = int64_t;
@@ -1178,7 +1181,7 @@ void Instance::interpret(uint8_t *iter) {
         std::cerr << "reading instruction " << instructions[byte].c_str()
                   << " at " << iter - bytes.get() << std::endl;
         std::cerr << "stack contents: ";
-        for (WasmValue *p = stack_start; p < stack; ++p) {
+        for (WasmValue *p = frame().locals; p < stack.unsafe_ptr(); p++) {
             std::cerr << p->u64 << " ";
         }
         std::cerr << std::endl << std::endl;
@@ -1191,8 +1194,8 @@ void Instance::interpret(uint8_t *iter) {
             break;
         case block: {
             Signature sn = read_blocktype(iter);
-            frame().control_stack.push_back(
-                {stack - sn.params.size(), block_ends[iter],
+            control_stack.push({stack.unsafe_ptr(-sn.params.size()),
+                                block_ends[iter],
                  static_cast<uint32_t>(sn.results.size())});
             break;
         }
@@ -1200,17 +1203,17 @@ void Instance::interpret(uint8_t *iter) {
             // reading blocktype each time maybe not efficient?
             uint8_t *loop_start = iter - 1;
             Signature sn = read_blocktype(iter);
-            frame().control_stack.push_back(
+            control_stack.push(
                 // iter - 1 so br goes back to the loop
-                {stack - sn.params.size(), loop_start,
+                {stack.unsafe_ptr(-sn.params.size()), loop_start,
                  static_cast<uint32_t>(sn.params.size())});
             break;
         }
         case if_: {
             Signature sn = read_blocktype(iter);
-            uint32_t cond = pop().u32;
-            frame().control_stack.push_back(
-                {stack - sn.params.size(), if_jumps[iter].end,
+            uint32_t cond = stack.pop().u32;
+            control_stack.push({stack.unsafe_ptr(-sn.params.size()),
+                                if_jumps[iter].end,
                  static_cast<uint32_t>(sn.results.size())});
             if (!cond)
                 iter = if_jumps[iter].else_;
@@ -1224,7 +1227,7 @@ void Instance::interpret(uint8_t *iter) {
             brk(0);
             break;
         case end:
-            if (frame().control_stack.size() == 1) {
+            if (control_stack.size() == 1) {
                 // function end block
                 if (brk(0))
                     return;
@@ -1234,7 +1237,7 @@ void Instance::interpret(uint8_t *iter) {
                 // BUT validation has confirmed that the result is
                 // the only thing left on the stack, so we can just
                 // pop the control stack (since the result is already in place)
-                frame().control_stack.pop_back();
+                control_stack.pop();
             }
             break;
         case br: {
@@ -1244,13 +1247,13 @@ void Instance::interpret(uint8_t *iter) {
         }
         case br_if: {
             uint32_t depth = read_leb128(iter);
-            if (pop().u32)
+            if (stack.pop().u32)
                 if (brk(depth))
                     return;
             break;
         }
         case br_table: {
-            uint32_t v = pop().u32;
+            uint32_t v = stack.pop().u32;
             uint32_t n_targets = read_leb128(iter);
             uint32_t target, depth = std::numeric_limits<uint32_t>::max();
 
@@ -1268,17 +1271,17 @@ void Instance::interpret(uint8_t *iter) {
             break;
         }
         case return_:
-            brk(frame().control_stack.size() - 1);
+            brk(control_stack.size() - 1);
             return;
         case call: {
             FunctionInfo &fn = functions[read_leb128(iter)];
-            call_function_info(fn, iter, [&] { iter = fn.start; });
+            call_function_info(fn, iter, stack, [&] { iter = fn.start; });
             break;
         }
         case call_indirect: {
             uint32_t type_idx = read_leb128(iter);
             uint32_t table_idx = read_leb128(iter);
-            uint32_t elem_idx = pop().u32;
+            uint32_t elem_idx = stack.pop().u32;
 
             Funcref funcref = tables[table_idx]->get(elem_idx);
             if (!funcref) {
@@ -1298,7 +1301,7 @@ void Instance::interpret(uint8_t *iter) {
             break;
         }
         case drop:
-            stack--;
+            stack.pop();
             break;
         case select: {
             stack -= 2;
@@ -1307,29 +1310,29 @@ void Instance::interpret(uint8_t *iter) {
             break;
         }
         case localget:
-            push(frame().locals[read_leb128(iter)]);
+            stack.push(frame().locals[read_leb128(iter)]);
             break;
         case localset:
-            frame().locals[read_leb128(iter)] = pop();
+            frame().locals[read_leb128(iter)] = stack.pop();
             break;
         case localtee:
             frame().locals[read_leb128(iter)] = stack[-1];
             break;
         case tableget:
-            push(tables[read_leb128(iter)]->get(pop().u32));
+            stack.push(tables[read_leb128(iter)]->get(stack.pop().u32));
             break;
         case tableset:
-            tables[read_leb128(iter)]->set(pop().u32, pop());
+            tables[read_leb128(iter)]->set(stack.pop().u32, stack.pop());
             break;
         case globalget:
-            push(globals[read_leb128(iter)]->value);
+            stack.push(globals[read_leb128(iter)]->value);
             break;
         case globalset:
-            globals[read_leb128(iter)]->value = pop();
+            globals[read_leb128(iter)]->value = stack.pop();
             break;
         case memorysize: {
             /* uint32_t mem_idx = */ read_leb128(iter);
-            push(memory->size());
+            stack.push(memory->size());
             break;
         }
         case memorygrow: {
@@ -1338,20 +1341,18 @@ void Instance::interpret(uint8_t *iter) {
             break;
         }
         case i32const:
-            push((int32_t)read_sleb128<32>(iter));
+            stack.push((int32_t)read_sleb128<32>(iter));
             break;
         case i64const:
-            push((int64_t)read_sleb128<64>(iter));
+            stack.push((int64_t)read_sleb128<64>(iter));
             break;
         case f32const: {
-            std::memcpy(&stack->f32, iter, sizeof(float));
-            stack++;
+            stack.push(*reinterpret_cast<float *>(iter));
             iter += sizeof(float);
             break;
         }
         case f64const:
-            std::memcpy(&stack->f64, iter, sizeof(double));
-            stack++;
+            stack.push(*reinterpret_cast<double *>(iter));
             iter += sizeof(double);
             break;
         // clang-format off
@@ -1498,13 +1499,13 @@ void Instance::interpret(uint8_t *iter) {
         case f32demote_f64:    UNARY_OP(f64, (float));
         case f64promote_f32:   UNARY_OP(f32, (double));
         // without type assertions these are noops
-        case i32reinterpret_f32: /* push(pop().i32); */ break;
-        case f32reinterpret_i32: /* push(pop().f32); */ break;
-        case i64reinterpret_f64: /* push(pop().i64); */ break;
-        case f64reinterpret_i64: /* push(pop().f64); */ break;
+        case i32reinterpret_f32: break;
+        case f32reinterpret_i32: break;
+        case i64reinterpret_f64: break;
+        case f64reinterpret_i64: break;
         case ref_null: {
             read_leb128(iter);
-            push((void*)nullptr);
+            stack.push((void*)nullptr);
             break;
         }
         case ref_is_null: {
@@ -1517,7 +1518,7 @@ void Instance::interpret(uint8_t *iter) {
             if (func_idx >= functions.size()) {
                 trap("unknown function");
             }
-            push(&funcrefs[func_idx]);
+            stack.push(&funcrefs[func_idx]);
             break;
         }
         // bitwise comparison applies to both
@@ -1533,9 +1534,9 @@ void Instance::interpret(uint8_t *iter) {
             switch (static_cast<FCInstruction>(byte)) {
                 case memory_init: {
                     uint32_t seg_idx = read_leb128(iter);
-                    uint32_t size = pop().u32;
-                    uint32_t offset = pop().u32;
-                    uint32_t dest = pop().u32;
+                    uint32_t size = stack.pop().u32;
+                    uint32_t offset = stack.pop().u32;
+                    uint32_t dest = stack.pop().u32;
                     if (dest + size > memory->size() * WasmMemory::PAGE_SIZE) {
                         trap("out of bounds memory access");
                     }
@@ -1551,25 +1552,25 @@ void Instance::interpret(uint8_t *iter) {
                     break;
                 }
                 case memory_copy: {
-                    uint32_t src = pop().u32;
-                    uint32_t dst = pop().u32;
-                    uint32_t size = pop().u32;
+                    uint32_t src = stack.pop().u32;
+                    uint32_t dst = stack.pop().u32;
+                    uint32_t size = stack.pop().u32;
                     memory->memcpy(dst, src, size);
                     break;
                 }
                 case memory_fill: {
-                    uint32_t value = pop().u32;
-                    uint32_t ptr = pop().u32;
-                    uint32_t size = pop().u32;
+                    uint32_t value = stack.pop().u32;
+                    uint32_t ptr = stack.pop().u32;
+                    uint32_t size = stack.pop().u32;
                     memory->memset(ptr, value, size);
                     break;
                 }
                 case table_init: {
                     uint32_t table_idx = read_leb128(iter);
                     uint32_t seg_idx = read_leb128(iter);
-                    uint32_t size = pop().u32;
-                    uint32_t offset = pop().u32;
-                    uint32_t dest = pop().u32;
+                    uint32_t size = stack.pop().u32;
+                    uint32_t offset = stack.pop().u32;
+                    uint32_t dest = stack.pop().u32;
 
                     auto& table = tables[table_idx];
                     if (dest + size > table->size()) {
@@ -1590,28 +1591,28 @@ void Instance::interpret(uint8_t *iter) {
                     break;
                 }
                 case table_copy: {
-                    uint32_t src = pop().u32;
-                    uint32_t dst = pop().u32;
-                    uint32_t size = pop().u32;
+                    uint32_t src = stack.pop().u32;
+                    uint32_t dst = stack.pop().u32;
+                    uint32_t size = stack.pop().u32;
                     tables[dst]->memcpy(dst, src, size);
                     break;
                 }
                 case table_grow: {
                     uint32_t table_idx = read_leb128(iter);
-                    WasmValue init = pop();
-                    uint32_t delta = pop().u32;
+                    WasmValue init = stack.pop();
+                    uint32_t delta = stack.pop().u32;
                     stack[-1].u32 = tables[table_idx]->grow(delta, init);
                     break;
                 }
                 case table_size: {
                     uint32_t table_idx = read_leb128(iter);
-                    push(tables[table_idx]->size());
+                    stack.push(tables[table_idx]->size());
                     break;
                 }
                 case table_fill: {
-                    WasmValue value = pop();
-                    uint32_t ptr = pop().u32;
-                    uint32_t size = pop().u32;
+                    WasmValue value = stack.pop();
+                    uint32_t ptr = stack.pop().u32;
+                    uint32_t size = stack.pop().u32;
                     uint32_t table_idx = read_leb128(iter);
                     tables[table_idx]->memset(ptr, value, size);
                     break;
@@ -1631,11 +1632,13 @@ void Instance::interpret(uint8_t *iter) {
 #undef STORE
 }
 
-// todo: this should check stack is the base pointer
-// won't be necessary after validation is added
 Instance::~Instance() {
-    assert(stack == stack_start);
-    free(stack_start);
+    assert(initial_stack.empty());
+    free(initial_stack.unsafe_ptr());
+    assert(frames.empty());
+    free(frames.unsafe_ptr());
+    assert(control_stack.empty());
+    free(control_stack.unsafe_ptr());
 }
 
 WasmMemory::WasmMemory() : memory(nullptr), current(0), maximum(0) {}

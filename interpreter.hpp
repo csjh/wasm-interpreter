@@ -322,10 +322,10 @@ struct BrTarget {
 };
 
 struct StackFrame {
-    // locals (points to somewhere in the stack allocation)
+    // start of locals (points to somewhere in the stack allocation)
     WasmValue *locals;
-    // control stack (pointers to the place a br jumps to)
-    std::vector<BrTarget> control_stack;
+    // points to somewhere in the control stack
+    BrTarget *control_stack;
 };
 
 struct IfJump {
@@ -387,10 +387,68 @@ using Exports = std::unordered_map<std::string, ExportValue>;
 using ModuleImports = std::unordered_map<std::string, ExportValue>;
 using Imports = std::unordered_map<std::string, ModuleImports>;
 
+template <typename T> class tape {
+    T *start;
+    T *ptr;
+    T *_end;
+
+  public:
+    tape(T *start, size_t length)
+        : start(start), ptr(start), _end(start + length) {}
+
+    void push(const T &value) {
+        if (ptr == _end) {
+            trap("call stack exhausted");
+        }
+        *ptr++ = value;
+    }
+    T pop() { return *--ptr; }
+    void clear() { ptr = start; }
+
+    T &back() { return ptr[-1]; }
+    T &operator[](ssize_t idx) { return ptr[idx]; }
+
+    void operator=(T *new_ptr) { ptr = new_ptr; }
+    void operator++() { *this += 1; }
+    void operator++(int) { *this += 1; }
+    void operator+=(ssize_t n) {
+        ptr += n;
+        if (ptr > _end) {
+            trap("call stack exhausted");
+        }
+    }
+    void operator--() { *this -= 1; }
+    void operator--(int) { *this -= 1; }
+    void operator-=(ssize_t n) { ptr -= n; }
+
+    ssize_t size() { return ptr - start; }
+    bool empty() { return ptr == start; }
+    T *unsafe_ptr() { return ptr; }
+    T *unsafe_ptr(ssize_t diff) { return ptr + diff; }
+
+    T *get_start() { return start; }
+    void set_start(T *new_start) { start = new_start; }
+
+    T *begin() { return start; }
+    T *end() { return ptr; }
+};
+
+template <typename T> class tape_guard {
+    tape<T> &tape;
+    T *old_ptr;
+
+  public:
+    inline tape_guard(::mitey::tape<T> &tape)
+        : tape(tape), old_ptr(tape.unsafe_ptr()) {}
+    inline ~tape_guard() { tape = old_ptr; }
+};
+
 class Instance {
     friend class Validator;
 
     static constexpr uint32_t MAX_LOCALS = 50000;
+    static constexpr uint32_t STACK_SIZE = 5 * 1024 * 1024; // 5mb
+    static constexpr uint32_t MAX_DEPTH = 1000;
 
     Instance(const Instance &) = delete;
     Instance &operator=(const Instance &) = delete;
@@ -402,9 +460,11 @@ class Instance {
     // WebAssembly.Memory
     std::shared_ptr<WasmMemory> memory;
     // internal stack
-    WasmValue *stack;
+    tape<WasmValue> initial_stack;
     // function-specific frames
-    std::vector<StackFrame> frames;
+    tape<StackFrame> frames;
+    // control stack
+    tape<BrTarget> control_stack;
     // function info
     std::vector<FunctionInfo> functions;
     // funcrefs corresponding to the above functions
@@ -421,8 +481,6 @@ class Instance {
     std::vector<Signature> types;
     // exports from export section
     Exports exports;
-    // stack start for debugging and emptyness assertions
-    WasmValue *stack_start;
     // data segments
     std::vector<Segment> data_segments;
     // tables
@@ -445,14 +503,16 @@ class Instance {
     }
 
     inline void call_function_info(const FunctionInfo &idx, uint8_t *return_to,
+                                   tape<WasmValue> &stack,
                                    std::function<void()> wasm_call);
-    void interpret(uint8_t *iter);
+    void interpret(uint8_t *iter, tape<WasmValue> &);
 
     void entrypoint(const FunctionInfo &);
+    void entrypoint(const FunctionInfo &, tape<WasmValue> &);
 
     WasmValue interpret_const(safe_byte_iterator &iter, valtype expected);
 
-    StackFrame &frame() { return frames.back(); }
+    StackFrame &frame() { return frames[-1]; }
 
     // makes a function run independently of the instance
     FunctionInfo externalize_function(const FunctionInfo &fn);
@@ -465,6 +525,4 @@ class Instance {
 
     const Exports &get_exports() { return exports; }
 };
-
-constexpr uint32_t stack_size = 5 * 1024 * 1024; // 5mb
 } // namespace mitey
