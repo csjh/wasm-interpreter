@@ -316,7 +316,7 @@ struct wastjson {
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(wastjson, source_filename, commands)
 
-std::unique_ptr<mitey::Instance> from_file(const std::string &filename,
+std::shared_ptr<mitey::Instance> from_file(const std::string &filename,
                                            const mitey::Imports &imports) {
     std::ifstream wasm_file{filename, std::ios::binary};
     if (!wasm_file) {
@@ -334,7 +334,7 @@ std::unique_ptr<mitey::Instance> from_file(const std::string &filename,
     wasm_file.read(reinterpret_cast<char *>(bytes.get()), length);
     wasm_file.close();
 
-    return std::make_unique<mitey::Instance>(std::move(bytes), length, imports);
+    return std::make_shared<mitey::Instance>(std::move(bytes), length, imports);
 }
 
 namespace fs = std::filesystem;
@@ -434,16 +434,20 @@ int main(int argv, char **argc) {
         }
     };
 
+    // force all created instances to stick around
+    // for export usage
+    std::vector<std::shared_ptr<mitey::Instance>> keepalive;
+
     for (auto &t : wast.commands) {
         nlohmann::json j = t;
         std::cerr << "Running test: " << j << std::endl;
 
         if (std::holds_alternative<test_module>(t)) {
             auto &m = std::get<test_module>(t);
-            instances[m.name] =
-                from_file(resolve_relative(filename, m.filename), imports);
-            instances["default"] =
-                from_file(resolve_relative(filename, m.filename), imports);
+            auto instance = from_file(resolve_relative(filename, m.filename), imports);
+            instances[m.name] = instance;
+            instances["default"] = instance;
+            keepalive.push_back(instance);
         } else if (std::holds_alternative<test_malformed>(t)) {
             auto &m = std::get<test_malformed>(t);
             if (m.filename.ends_with(".wat"))
@@ -611,6 +615,7 @@ int main(int argv, char **argc) {
             }
         } else if (std::holds_alternative<test_register>(t)) {
             auto &m = std::get<test_register>(t);
+            keepalive.push_back(instances[m.name]);
             imports[m.as] = instances[m.name]->get_exports();
         } else {
             std::cerr << "Unhandled std::variant type" << std::endl;
