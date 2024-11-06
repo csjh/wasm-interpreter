@@ -2,6 +2,7 @@
 #include "spec.hpp"
 #include "validator.hpp"
 #include <algorithm>
+#include <cmath>
 #include <functional>
 #include <iostream>
 #include <limits>
@@ -503,7 +504,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
             iter += name_len;
 
             uint8_t desc = *iter++;
-            if (desc < 0 || desc > 3) {
+            if (desc > 3) {
                 throw validation_error("invalid export description");
             }
             ExportDesc export_desc = static_cast<ExportDesc>(desc);
@@ -921,7 +922,7 @@ inline void Instance::call_function_info(const FunctionInfo &fn,
         WasmValue *locals_start = stack.unsafe_ptr() - fn.type.params.size();
         WasmValue *locals_end = locals_start + fn.locals.size();
         // zero out non-parameter locals
-        std::memset(stack.unsafe_ptr(), 0,
+        std::memset(reinterpret_cast<void *>(stack.unsafe_ptr()), 0,
                     (locals_end - stack.unsafe_ptr()) * sizeof(WasmValue));
         stack = locals_end;
         frames.push({locals_start, control_stack.get_start()});
@@ -1108,7 +1109,7 @@ void Instance::interpret(uint8_t *iter, tape<WasmValue> &stack) {
 #define TRUNC(type, op, lower, upper)                                          \
     {                                                                          \
         if (!std::isfinite(stack[-1].type)) {                                  \
-            if (isnan(stack[-1].type)) {                                       \
+            if (std::isnan(stack[-1].type)) {                                  \
                 trap("invalid conversion to integer");                         \
             } else {                                                           \
                 trap("integer overflow");                                      \
@@ -1166,7 +1167,7 @@ void Instance::interpret(uint8_t *iter, tape<WasmValue> &stack) {
 #define MINMAX(type, fn)                                                       \
     {                                                                          \
         stack--;                                                               \
-        if (isnan(stack[-1].type) || isnan(stack[0].type)) {                   \
+        if (std::isnan(stack[-1].type) || std::isnan(stack[0].type)) {         \
             stack[-1].type = std::numeric_limits<type>::quiet_NaN();           \
         } else {                                                               \
             stack[-1].type = fn(stack[-1].type, stack[0].type);                \
@@ -1643,6 +1644,7 @@ void Instance::interpret(uint8_t *iter, tape<WasmValue> &stack) {
                     break;
                 }
             }
+            [[fallthrough]];
         }
         default: __builtin_unreachable();
             // clang-format on

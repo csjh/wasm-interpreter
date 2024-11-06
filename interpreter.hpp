@@ -8,6 +8,7 @@
 #include <iostream>
 #include <memory>
 #include <unordered_map>
+#include <variant>
 #include <vector>
 
 namespace mitey {
@@ -431,16 +432,6 @@ template <typename T> class tape {
 
     T *begin() { return start; }
     T *end() { return ptr; }
-};
-
-template <typename T> class tape_guard {
-    tape<T> &tape;
-    T *old_ptr;
-
-  public:
-    inline tape_guard(::mitey::tape<T> &tape)
-        : tape(tape), old_ptr(tape.unsafe_ptr()) {}
-    inline ~tape_guard() { tape = old_ptr; }
 };
 
 class Instance {

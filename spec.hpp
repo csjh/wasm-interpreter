@@ -3,6 +3,8 @@
 #include <cassert>
 #include <cstdint>
 #include <vector>
+#include <string>
+#include <stdexcept>
 
 namespace mitey {
 class malformed_error : public std::runtime_error {
