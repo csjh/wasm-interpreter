@@ -291,11 +291,11 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
             iter += field_len;
 
             if (!imports.contains(module)) {
-                throw validation_error("unknown import");
+                throw link_error("unknown import");
             }
             const auto &module_imports = imports.at(module);
             if (!module_imports.contains(field)) {
-                throw validation_error("unknown import");
+                throw link_error("unknown import");
             }
             const auto &import = module_imports.at(field);
 
@@ -329,10 +329,13 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
                 auto table = std::get<std::shared_ptr<WasmTable>>(import);
                 auto [initial, max] = get_table_limits(iter);
                 if (table->size() < initial) {
-                    throw validation_error("table size exceeds limit");
+                    throw link_error("incompatible import type");
                 }
                 if (table->max() > max) {
-                    throw validation_error("table size exceeds limit");
+                    throw link_error("incompatible import type");
+                }
+                if (tables.size() >= 1) {
+                    throw validation_error("multiple tables");
                 }
                 tables.push_back(table);
             } else if (std::holds_alternative<std::shared_ptr<WasmMemory>>(
@@ -345,10 +348,10 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
                 auto [initial, max] = get_memory_limits(iter);
                 auto memory = std::get<std::shared_ptr<WasmMemory>>(import);
                 if (memory->size() < initial) {
-                    throw validation_error("memory size exceeds limit");
+                    throw link_error("incompatible import type");
                 }
                 if (memory->max() > max) {
-                    throw validation_error("memory size exceeds limit");
+                    throw link_error("incompatible import type");
                 }
                 this->memory = memory;
             } else if (std::holds_alternative<std::shared_ptr<WasmGlobal>>(
@@ -415,6 +418,10 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
             uint8_t elem_type = *iter++;
             if (!is_reftype(elem_type)) {
                 throw validation_error("invalid table element type");
+            }
+
+            if (tables.size() >= 1) {
+                throw validation_error("multiple tables");
             }
 
             auto [initial, max] = get_memory_limits(iter);
@@ -639,7 +646,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
                 uint32_t offset = interpret_const(iter, valtype::i32).u32;
                 uint32_t n_elements = safe_read_leb128<uint32_t>(iter);
                 if (offset + n_elements > tables[table_idx]->size()) {
-                    throw link_error("elements segment does not fit");
+                    throw uninstantiable_error("out of bounds table access");
                 }
 
                 std::vector<WasmValue> elem{n_elements};
@@ -657,7 +664,8 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
                             iter, static_cast<valtype>(reftype));
                         elem.push_back(el);
                         if (offset + j >= tables[table_idx]->size()) {
-                            throw link_error("elements segment does not fit");
+                            throw uninstantiable_error(
+                                "out of bounds table access");
                         }
                         tables[table_idx]->set(offset + j, el);
                     }
@@ -678,7 +686,8 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
                         WasmValue funcref = &funcrefs[elem_idx];
                         elem.push_back(funcref);
                         if (offset + j >= tables[table_idx]->size()) {
-                            throw link_error("elements segment does not fit");
+                            throw uninstantiable_error(
+                                "out of bounds table access");
                         }
                         tables[table_idx]->set(offset + j, funcref);
                     }
@@ -802,7 +811,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
                 if (offset + data_length >
                     memory->size() *
                         static_cast<uint64_t>(WasmMemory::PAGE_SIZE)) {
-                    throw link_error("data segment does not fit");
+                    throw uninstantiable_error("out of bounds memory access");
                 }
                 if (!iter.has_n_left(data_length)) {
                     throw malformed_error(
