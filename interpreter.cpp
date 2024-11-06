@@ -869,8 +869,16 @@ FunctionInfo Instance::externalize_function(const FunctionInfo &fn) {
                     initial_stack.push(extern_stack[i]);
                 }
 
-                entrypoint(fn);
+                try {
+                    entrypoint(fn);
+                } catch (const trap_error &e) {
+                    initial_stack.clear();
+                    control_stack.clear();
+                    frames.clear();
+                    throw;
+                }
 
+                initial_stack -= type.results.size();
                 for (uint32_t i = 0; i < type.results.size(); i++) {
                     extern_stack[i] = initial_stack[i];
                 }
@@ -880,10 +888,24 @@ FunctionInfo Instance::externalize_function(const FunctionInfo &fn) {
 }
 
 void Instance::entrypoint(const FunctionInfo &fn) {
+    entrypoint(fn, this->initial_stack);
+}
+void Instance::entrypoint(const FunctionInfo &fn, tape<WasmValue> &stack) {
+    auto backup_cs = control_stack;
+    auto backup_frames = frames;
+
+    control_stack.set_start(control_stack.unsafe_ptr());
+    frames.set_start(frames.unsafe_ptr());
+
     try {
-        call_function_info(fn, nullptr, [&] { interpret(fn.start); });
-    } catch (const trap_error &e) {
-        stack = stack_start;
+        call_function_info(fn, nullptr, stack,
+                           [&] { interpret(fn.start, stack); });
+        control_stack = backup_cs;
+        frames = backup_frames;
+    } catch (const trap_error &) {
+        control_stack = backup_cs;
+        control_stack.clear();
+        frames = backup_frames;
         frames.clear();
         throw;
     }
@@ -891,28 +913,21 @@ void Instance::entrypoint(const FunctionInfo &fn) {
 
 inline void Instance::call_function_info(const FunctionInfo &fn,
                                          uint8_t *return_to,
+                                         tape<WasmValue> &stack,
                                          std::function<void()> wasm_call) {
     if (fn.start != nullptr) {
         // parameters are the first locals and they're taken from the top of
         // the stack
-        WasmValue *locals_start = stack - fn.type.params.size();
+        WasmValue *locals_start = stack.unsafe_ptr() - fn.type.params.size();
         WasmValue *locals_end = locals_start + fn.locals.size();
         // zero out non-parameter locals
-        std::memset(stack, 0, (locals_end - stack) * sizeof(WasmValue));
+        std::memset(stack.unsafe_ptr(), 0,
+                    (locals_end - stack.unsafe_ptr()) * sizeof(WasmValue));
         stack = locals_end;
-        frames.emplace_back(
-            StackFrame{locals_start,
-                       {{locals_start, return_to,
-                         static_cast<uint32_t>(fn.type.results.size())}}});
-
-#if WASM_DEBUG
-        constexpr size_t MAX_DEPTH = 1'000;
-#else
-        constexpr size_t MAX_DEPTH = 1'000'000;
-#endif
-        if (frames.size() > MAX_DEPTH) {
-            trap("call stack exhausted");
-        }
+        frames.push({locals_start, control_stack.get_start()});
+        control_stack.set_start(control_stack.unsafe_ptr());
+        control_stack.push({locals_start, return_to,
+                            static_cast<uint32_t>(fn.type.results.size())});
 
         wasm_call();
     } else {
@@ -1067,16 +1082,14 @@ void Instance::interpret(uint8_t *iter, tape<WasmValue> &stack) {
         exit from block          -> valid if stack == return_type
     */
     auto brk = [&](uint32_t depth) {
-        depth++;
-        std::vector<BrTarget> &control_stack = frame().control_stack;
-        BrTarget target = control_stack[control_stack.size() - depth];
-        control_stack.erase(control_stack.end() - depth, control_stack.end());
-        std::memmove(target.stack, stack - target.arity,
+        control_stack -= depth;
+        BrTarget target = control_stack.pop();
+        std::memmove(target.stack, stack.unsafe_ptr() - target.arity,
                      target.arity * sizeof(WasmValue));
         stack = target.stack + target.arity;
         iter = target.dest;
         if (control_stack.empty()) {
-            frames.pop_back();
+            control_stack.set_start(frames.pop().control_stack);
             return frames.empty();
         } else {
             return false;
@@ -1196,7 +1209,7 @@ void Instance::interpret(uint8_t *iter, tape<WasmValue> &stack) {
             Signature sn = read_blocktype(iter);
             control_stack.push({stack.unsafe_ptr(-sn.params.size()),
                                 block_ends[iter],
-                 static_cast<uint32_t>(sn.results.size())});
+                                static_cast<uint32_t>(sn.results.size())});
             break;
         }
         case loop: {
@@ -1214,7 +1227,7 @@ void Instance::interpret(uint8_t *iter, tape<WasmValue> &stack) {
             uint32_t cond = stack.pop().u32;
             control_stack.push({stack.unsafe_ptr(-sn.params.size()),
                                 if_jumps[iter].end,
-                 static_cast<uint32_t>(sn.results.size())});
+                                static_cast<uint32_t>(sn.results.size())});
             if (!cond)
                 iter = if_jumps[iter].else_;
             break;
@@ -1292,12 +1305,7 @@ void Instance::interpret(uint8_t *iter, tape<WasmValue> &stack) {
             }
             Instance &callee = *funcref->instance;
             FunctionInfo &fn = callee.functions[funcref->funcidx];
-            // todo: need to account for back and forth cross-instance calls,
-            // callstack wouldn't be empty
-
-            // callee.stack = thisstack
-            // callee.frames = thisstack?
-            callee.entrypoint(fn);
+            callee.entrypoint(fn, stack);
             break;
         }
         case drop:
