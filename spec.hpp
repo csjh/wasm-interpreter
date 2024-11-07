@@ -2,9 +2,9 @@
 
 #include <cassert>
 #include <cstdint>
-#include <vector>
-#include <string>
 #include <stdexcept>
+#include <string>
+#include <vector>
 
 namespace mitey {
 class malformed_error : public std::runtime_error {
@@ -50,16 +50,16 @@ enum class valtype : uint8_t {
     externref = 0x6f,
 };
 
-static inline bool is_valtype(uint8_t byte) {
+static inline bool is_reftype(uint32_t byte) {
+    return byte == static_cast<uint8_t>(valtype::funcref) ||
+           byte == static_cast<uint8_t>(valtype::externref);
+}
+
+static inline bool is_valtype(uint32_t byte) {
     return byte == static_cast<uint8_t>(valtype::i32) ||
            byte == static_cast<uint8_t>(valtype::i64) ||
            byte == static_cast<uint8_t>(valtype::f32) ||
-           byte == static_cast<uint8_t>(valtype::f64);
-}
-
-static inline bool is_reftype(uint8_t byte) {
-    return byte == static_cast<uint8_t>(valtype::funcref) ||
-           byte == static_cast<uint8_t>(valtype::externref);
+           byte == static_cast<uint8_t>(valtype::f64) || is_reftype(byte);
 }
 
 struct Signature {
