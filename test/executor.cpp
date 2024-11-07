@@ -18,6 +18,8 @@ struct value {
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(value, type, value)
 
 std::vector<mitey::WasmValue> to_wasm_values(const std::vector<value> &values) {
+    static std::unordered_map<std::string, void *> externrefs;
+
     std::vector<mitey::WasmValue> result;
     for (auto &v : values) {
         if (v.type == "i32") {
@@ -48,6 +50,22 @@ std::vector<mitey::WasmValue> to_wasm_values(const std::vector<value> &values) {
                 uint64_t bytes = std::stoull(v.value);
                 result.push_back(
                     mitey::WasmValue(*reinterpret_cast<double *>(&bytes)));
+            }
+        } else if (v.type == "externref") {
+            if (v.value == "null") {
+                result.push_back(mitey::WasmValue((void *)nullptr));
+            } else {
+                if (externrefs.find(v.value) == externrefs.end()) {
+                    externrefs[v.value] = &externrefs[v.value];
+                }
+                result.push_back(mitey::WasmValue(externrefs[v.value]));
+            }
+        } else if (v.type == "funcref") {
+            if (v.value == "null") {
+                result.push_back(mitey::WasmValue((void *)nullptr));
+            } else {
+                std::cerr << "Unknown reference value: " << v.value
+                          << std::endl;
             }
         } else {
             std::cerr << "Unknown type: " << v.type << std::endl;
@@ -444,7 +462,8 @@ int main(int argv, char **argc) {
 
         if (std::holds_alternative<test_module>(t)) {
             auto &m = std::get<test_module>(t);
-            auto instance = from_file(resolve_relative(filename, m.filename), imports);
+            auto instance =
+                from_file(resolve_relative(filename, m.filename), imports);
             instances[m.name] = instance;
             instances["default"] = instance;
             keepalive.push_back(instance);
