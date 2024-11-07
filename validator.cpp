@@ -635,10 +635,11 @@ void Validator::validate(safe_byte_iterator &iter, const Signature &signature,
                     apply({{valtype::i32, instance.tables[table_idx]->type, valtype::i32}, {}});
                     break;
                 }
-                default: ensure(false, "unimplemented FC extension instruction");
+                default: ensure(false, "unimplemented FC extension instruction " + std::to_string(byte));
             }
+            break;
         }
-        default: ensure(false, "unimplemented instruction");
+        default: ensure(false, "unimplemented instruction " + std::to_string(byte));
             // clang-format on
         };
     }

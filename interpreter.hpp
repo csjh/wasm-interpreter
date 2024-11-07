@@ -131,7 +131,8 @@ class WasmTable {
     void set(uint32_t idx, WasmValue value);
 
     void copy_into(uint32_t ptr, const WasmValue *data, uint32_t length);
-    void memcpy(uint32_t dst, uint32_t src, uint32_t length);
+    void memcpy(WasmTable &dst_table, uint32_t dst, uint32_t src,
+                uint32_t length);
     void memset(uint32_t dst, WasmValue value, uint32_t length);
 };
 

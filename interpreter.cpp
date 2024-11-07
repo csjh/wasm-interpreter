@@ -357,7 +357,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
                            import)) {
                 // global
                 uint32_t valtype = safe_read_leb128<uint32_t>(iter);
-                if (!is_valtype(valtype) && !is_reftype(valtype)) {
+                if (!is_valtype(valtype)) {
                     throw malformed_error("invalid global type");
                 }
                 uint8_t mut = *iter++;
@@ -669,7 +669,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
                     if (reftype_or_elemkind == 256)
                         reftype_or_elemkind = 0;
                     if (reftype_or_elemkind != 0) {
-                            throw validation_error("invalid elemkind");
+                        throw validation_error("invalid elemkind");
                     }
                     // flags = 0 or 2
                     // characteristics: active, elem kind + indices
@@ -1286,8 +1286,9 @@ void Instance::interpret(uint8_t *iter, tape<WasmValue> &stack) {
             break;
         }
         case return_:
-            brk(control_stack.size() - 1);
-            return;
+            if (brk(control_stack.size() - 1))
+                return;
+            break;
         case call: {
             FunctionInfo &fn = functions[read_leb128(iter)];
             call_function_info(fn, iter, stack, [&] { iter = fn.start; });
@@ -1606,10 +1607,12 @@ void Instance::interpret(uint8_t *iter, tape<WasmValue> &stack) {
                     break;
                 }
                 case table_copy: {
+                    uint32_t src_table = read_leb128(iter);
+                    uint32_t dst_table = read_leb128(iter);
                     uint32_t src = stack.pop().u32;
                     uint32_t dst = stack.pop().u32;
                     uint32_t size = stack.pop().u32;
-                    tables[dst]->memcpy(dst, src, size);
+                    tables[src_table]->memcpy(*tables[dst_table].get(), dst, src, size);
                     break;
                 }
                 case table_grow: {
@@ -1625,15 +1628,16 @@ void Instance::interpret(uint8_t *iter, tape<WasmValue> &stack) {
                     break;
                 }
                 case table_fill: {
+                    uint32_t table_idx = read_leb128(iter);
                     WasmValue value = stack.pop();
                     uint32_t ptr = stack.pop().u32;
                     uint32_t size = stack.pop().u32;
-                    uint32_t table_idx = read_leb128(iter);
                     tables[table_idx]->memset(ptr, value, size);
                     break;
                 }
+                default: __builtin_unreachable();
             }
-            [[fallthrough]];
+            break;
         }
         default: __builtin_unreachable();
             // clang-format on
@@ -1765,11 +1769,13 @@ void WasmTable::copy_into(uint32_t dst, const WasmValue *data,
     std::memcpy(elements + dst, data, length * sizeof(WasmValue));
 }
 
-void WasmTable::memcpy(uint32_t dst, uint32_t src, uint32_t length) {
-    if (dst + length > current || src + length > current) {
+void WasmTable::memcpy(WasmTable &dst_table, uint32_t dst, uint32_t src,
+                       uint32_t length) {
+    if (dst + length > this->current || src + length > dst_table.current) {
         trap("out of bounds table access");
     }
-    std::memcpy(elements + dst, elements + src, length * sizeof(WasmValue));
+    std::memmove(dst_table.elements + dst, elements + src,
+                 length * sizeof(WasmValue));
 }
 
 void WasmTable::memset(uint32_t dst, WasmValue value, uint32_t length) {
