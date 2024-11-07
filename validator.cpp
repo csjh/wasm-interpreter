@@ -34,10 +34,24 @@ void Validator::validate(uint8_t *end) {
 class WasmStack : protected std::vector<valtype> {
     bool polymorphized = false;
 
+    bool check(const std::vector<valtype> &expected) {
+        if (expected.size() > size())
+            return false;
+
+        // due to stack polymorphism there might only be a few actual types on
+        // the stack
+        auto materialized =
+            std::min(std::vector<valtype>::size(), expected.size());
+        if (!std::equal(expected.rbegin(), expected.rbegin() + materialized,
+                        rbegin()))
+            return false;
+
+        return true;
+    }
+
   public:
     bool operator==(const std::vector<valtype> &rhs) {
-        pop(rhs);
-        return std::vector<valtype>::empty();
+        return check(rhs) && (rhs.size() >= std::vector<valtype>::size());
     }
 
     void polymorphize() {
@@ -51,15 +65,11 @@ class WasmStack : protected std::vector<valtype> {
     }
     void pop(valtype expected_ty) { pop(std::vector<valtype>{expected_ty}); }
     void pop(const std::vector<valtype> &expected) {
-        ensure(expected.size() <= size(), "type mismatch");
+        ensure(check(expected), "type mismatch");
 
-        // due to stack polymorphism there might only be a few actual types on
-        // the stack
-        unsigned long materialized =
+        auto materialized =
             std::min(std::vector<valtype>::size(), expected.size());
-        ensure(std::equal(expected.rbegin(), expected.rbegin() + materialized,
-                          rbegin()),
-               "type mismatch");
+
         erase(end() - materialized, end());
     }
 
