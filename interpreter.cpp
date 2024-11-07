@@ -1568,9 +1568,9 @@ void Instance::interpret(uint8_t *iter, tape<WasmValue> &stack) {
                     break;
                 }
                 case memory_copy: {
+                    uint32_t size = stack.pop().u32;
                     uint32_t src = stack.pop().u32;
                     uint32_t dst = stack.pop().u32;
-                    uint32_t size = stack.pop().u32;
                     memory->memcpy(dst, src, size);
                     break;
                 }
@@ -1609,9 +1609,9 @@ void Instance::interpret(uint8_t *iter, tape<WasmValue> &stack) {
                 case table_copy: {
                     uint32_t src_table = read_leb128(iter);
                     uint32_t dst_table = read_leb128(iter);
+                    uint32_t size = stack.pop().u32;
                     uint32_t src = stack.pop().u32;
                     uint32_t dst = stack.pop().u32;
-                    uint32_t size = stack.pop().u32;
                     tables[src_table]->memcpy(*tables[dst_table].get(), dst, src, size);
                     break;
                 }
@@ -1771,7 +1771,7 @@ void WasmTable::copy_into(uint32_t dst, const WasmValue *data,
 
 void WasmTable::memcpy(WasmTable &dst_table, uint32_t dst, uint32_t src,
                        uint32_t length) {
-    if (dst + length > this->current || src + length > dst_table.current) {
+    if (dst + length > dst_table.current || src + length > this->current) {
         trap("out of bounds table access");
     }
     std::memmove(dst_table.elements + dst, elements + src,
