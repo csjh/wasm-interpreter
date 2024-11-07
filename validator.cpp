@@ -205,23 +205,24 @@ void Validator::validate(safe_byte_iterator &iter, const Signature &signature,
             Signature signature = instance.read_blocktype(iter);
 
             stack.pop(signature.params);
+            control_stack.push_back(signature.results);
 
             uint8_t *if_start = iter.unsafe_ptr();
-
-            control_stack.push_back(signature.results);
             validate(iter, signature);
             uint8_t *else_start = iter.unsafe_ptr();
+
             // validate else branch if previous instruction was else
             if (iter[-1] == static_cast<uint8_t>(else_)) {
                 validate(iter, signature);
-                // only push results if the else branch exists
-                stack.push(signature.results);
             } else {
+                // if there's no else branch, params and results must match
+                ensure(signature.params == signature.results, "type mismatch");
                 // if there's no else branch, we want false to jump to the end
                 // instruction
                 else_start--;
             }
             control_stack.pop_back();
+            stack.push(signature.results);
 
             instance.if_jumps[if_start] = {else_start, iter.unsafe_ptr()};
             break;
