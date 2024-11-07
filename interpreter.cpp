@@ -639,6 +639,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
                 }
 
                 uint32_t offset = interpret_const(iter, valtype::i32).u32;
+                uint16_t reftype_or_elemkind = flags & 0b10 ? *iter++ : 256;
                 uint32_t n_elements = safe_read_leb128<uint32_t>(iter);
                 if (offset + n_elements > tables[table_idx]->size()) {
                     throw uninstantiable_error("out of bounds table access");
@@ -648,15 +649,15 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
                 if (flags & 0b100) {
                     // flags = 4 or 6
                     // characteristics: active, elem type + exprs
-                    uint8_t reftype =
-                        flags & 0b10 ? *iter++
-                                     : static_cast<uint8_t>(valtype::funcref);
-                    if (!is_reftype(reftype)) {
+                    if (reftype_or_elemkind == 256)
+                        reftype_or_elemkind =
+                            static_cast<uint16_t>(valtype::funcref);
+                    if (!is_reftype(reftype_or_elemkind)) {
                         throw validation_error("invalid reftype");
                     }
+                    valtype reftype = static_cast<valtype>(reftype_or_elemkind);
                     for (uint32_t j = 0; j < n_elements; j++) {
-                        WasmValue el = interpret_const(
-                            iter, static_cast<valtype>(reftype));
+                        WasmValue el = interpret_const(iter, reftype);
                         elem.push_back(el);
                         if (offset + j >= tables[table_idx]->size()) {
                             throw uninstantiable_error(
@@ -665,11 +666,10 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
                         tables[table_idx]->set(offset + j, el);
                     }
                 } else {
-                    if (flags & 0b10) {
-                        uint8_t elemkind = *iter++;
-                        if (elemkind != 0) {
+                    if (reftype_or_elemkind == 256)
+                        reftype_or_elemkind = 0;
+                    if (reftype_or_elemkind != 0) {
                             throw validation_error("invalid elemkind");
-                        }
                     }
                     // flags = 0 or 2
                     // characteristics: active, elem kind + indices
