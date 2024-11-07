@@ -1552,7 +1552,7 @@ void Instance::interpret(uint8_t *iter, tape<WasmValue> &stack) {
         case multibyte: {
             byte = *iter++;
 #if WASM_DEBUG
-            std::cerr << "reading multibyte instruction " << instructions[byte].c_str()
+            std::cerr << "reading multibyte instruction " << multibyte_instructions[byte].c_str()
                       << " at " << iter - bytes.get() << std::endl;
 #endif
             using enum FCInstruction;

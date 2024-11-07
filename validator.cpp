@@ -560,7 +560,10 @@ void Validator::validate(safe_byte_iterator &iter, const Signature &signature,
         }
         case multibyte: {
             uint8_t byte = *iter++;
-            ensure(true, "invalid FC extension instruction");
+#if WASM_DEBUG
+            std::cerr << "reading multibyte instruction " << multibyte_instructions[byte].c_str()
+                      << " at " << iter - instance.bytes.get() << std::endl;
+#endif
 
             using enum FCInstruction;
             switch (static_cast<FCInstruction>(byte)) {

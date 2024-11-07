@@ -357,6 +357,8 @@ static std::string instructions[] = {
     [static_cast<uint8_t>(Instruction::localtee)] = "local.tee",
     [static_cast<uint8_t>(Instruction::globalget)] = "global.get",
     [static_cast<uint8_t>(Instruction::globalset)] = "global.set",
+    [static_cast<uint8_t>(Instruction::tableget)] = "table.get",
+    [static_cast<uint8_t>(Instruction::tableset)] = "table.set",
     [static_cast<uint8_t>(Instruction::i32load)] = "i32.load",
     [static_cast<uint8_t>(Instruction::i64load)] = "i64.load",
     [static_cast<uint8_t>(Instruction::f32load)] = "f32.load",
@@ -508,8 +510,24 @@ static std::string instructions[] = {
     [static_cast<uint8_t>(Instruction::i32reinterpret_f32)] = "i32.reinterpret_f32",
     [static_cast<uint8_t>(Instruction::i64reinterpret_f64)] = "i64.reinterpret_f64",
     [static_cast<uint8_t>(Instruction::f32reinterpret_i32)] = "f32.reinterpret_i32",
-    [static_cast<uint8_t>(Instruction::f64reinterpret_i64)] = "f64.reinterpret_i64"
-};
+    [static_cast<uint8_t>(Instruction::f64reinterpret_i64)] = "f64.reinterpret_i64",
+    [static_cast<uint8_t>(Instruction::ref_null)] = "ref.null",
+    [static_cast<uint8_t>(Instruction::ref_is_null)] = "ref.is_null",
+    [static_cast<uint8_t>(Instruction::ref_func)] = "ref.func",
+    [static_cast<uint8_t>(Instruction::ref_eq)] = "ref.eq",
+    [static_cast<uint8_t>(Instruction::multibyte)] = "multibyte"};
+
+static std::string multibyte_instructions[] = {
+    [static_cast<uint8_t>(FCInstruction::memory_init)] = "memory.init",
+    [static_cast<uint8_t>(FCInstruction::data_drop)] = "data.drop",
+    [static_cast<uint8_t>(FCInstruction::memory_copy)] = "memory.copy",
+    [static_cast<uint8_t>(FCInstruction::memory_fill)] = "memory.fill",
+    [static_cast<uint8_t>(FCInstruction::table_init)] = "table.init",
+    [static_cast<uint8_t>(FCInstruction::elem_drop)] = "elem.drop",
+    [static_cast<uint8_t>(FCInstruction::table_copy)] = "table.copy",
+    [static_cast<uint8_t>(FCInstruction::table_grow)] = "table.grow",
+    [static_cast<uint8_t>(FCInstruction::table_size)] = "table.size",
+    [static_cast<uint8_t>(FCInstruction::table_fill)] = "table.fill"};
 #endif
 // clang-format on
 
