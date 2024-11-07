@@ -1024,7 +1024,7 @@ WasmValue Instance::interpret_const(safe_byte_iterator &iter,
             stack.push((void *)nullptr);
             uint32_t reftype = safe_read_leb128<uint32_t>(iter);
             if (!is_reftype(reftype)) {
-                throw validation_error("invalid reference type");
+                throw validation_error("type mismatch");
             }
             stack_types.push_back(static_cast<valtype>(reftype));
             break;
@@ -1344,7 +1344,8 @@ void Instance::interpret(uint8_t *iter, tape<WasmValue> &stack) {
             stack.push(tables[read_leb128(iter)]->get(stack.pop().u32));
             break;
         case tableset:
-            tables[read_leb128(iter)]->set(stack.pop().u32, stack.pop());
+            stack -= 2;
+            tables[read_leb128(iter)]->set(stack[0].u32, stack[1]);
             break;
         case globalget:
             stack.push(globals[read_leb128(iter)]->value);

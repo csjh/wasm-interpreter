@@ -530,13 +530,13 @@ void Validator::validate(safe_byte_iterator &iter, const Signature &signature,
         case f64reinterpret_i64: apply({{valtype::i64}, {valtype::f64}}); break;
         case ref_null: {
             uint32_t type_idx = safe_read_leb128<uint32_t>(iter);
-            ensure(is_reftype(type_idx), "invalid reference type");
+            ensure(is_reftype(type_idx), "type mismatch");
             apply({{}, {static_cast<valtype>(type_idx)}});
             break;
         }
         case ref_is_null: {
             valtype peek = stack.back();
-            ensure(peek == valtype::funcref || peek == valtype::externref, "invalid reference type");
+            ensure(is_reftype(peek), "type mismatch");
             apply({{peek}, {valtype::i32}});
             break;
         }
@@ -548,7 +548,7 @@ void Validator::validate(safe_byte_iterator &iter, const Signature &signature,
         }
         case ref_eq: {
             valtype peek = stack.back();
-            ensure(peek == valtype::funcref || peek == valtype::externref, "invalid reference type");
+            ensure(is_reftype(peek), "type mismatch");
             apply({{peek, peek}, {valtype::i32}});
             break;
         }

@@ -50,9 +50,18 @@ enum class valtype : uint8_t {
     externref = 0x6f,
 };
 
+static inline bool is_reftype(valtype type) {
+    return type == valtype::funcref || type == valtype::externref;
+}
+
 static inline bool is_reftype(uint32_t byte) {
     return byte == static_cast<uint8_t>(valtype::funcref) ||
            byte == static_cast<uint8_t>(valtype::externref);
+}
+
+static inline bool is_valtype(valtype type) {
+    return type == valtype::i32 || type == valtype::i64 ||
+           type == valtype::f32 || type == valtype::f64 || is_reftype(type);
 }
 
 static inline bool is_valtype(uint32_t byte) {
