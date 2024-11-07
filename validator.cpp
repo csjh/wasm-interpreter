@@ -114,12 +114,9 @@ void Validator::validate(safe_byte_iterator &iter, const Signature &signature,
 #define LOAD(type, stacktype)                                                  \
     {                                                                          \
         uint32_t a = safe_read_leb128<uint32_t>(iter);                         \
-        if ((1 << 6) & a) {                                                    \
-            a -= 1 << 6;                                                       \
-            /* todo: test multi memory proposal */                             \
-            a = safe_read_leb128<uint32_t>(iter);                              \
-        } else {                                                               \
-            ensure(instance.memory != nullptr, "unknown memory");              \
+        ensure(instance.memory != nullptr, "unknown memory");                  \
+        if (a >= 32) {                                                         \
+            throw malformed_error("malformed memop flags");                    \
         }                                                                      \
         uint32_t align = 1 << a;                                               \
         ensure(align <= sizeof(type),                                          \
@@ -281,9 +278,6 @@ void Validator::validate(safe_byte_iterator &iter, const Signature &signature,
             uint32_t type_idx = safe_read_leb128<uint32_t>(iter);
             ensure(type_idx < instance.types.size(), "unknown type");
 
-            // todo: remove with multiple tables stuff
-            if (*iter != 0)
-                throw malformed_error("zero flag expected");
             uint32_t table_idx = safe_read_leb128<uint32_t>(iter);
             ensure(table_idx < instance.tables.size(), "unknown table");
             ensure(instance.tables[table_idx]->type == valtype::funcref,

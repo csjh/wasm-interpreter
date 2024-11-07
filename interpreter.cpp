@@ -240,10 +240,6 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
             iter += n_params;
 
             uint32_t n_results = safe_read_leb128<uint32_t>(iter);
-            // todo: change this with multivalue proposal
-            if (n_results > 1) {
-                throw validation_error("invalid result arity");
-            }
             fn.results.reserve(n_results);
             for (uint32_t j = 0; j < n_results; ++j) {
                 if (!is_valtype(iter[j])) {
@@ -340,9 +336,6 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
                 if (table->max() > max) {
                     throw link_error("incompatible import type");
                 }
-                if (tables.size() >= 1) {
-                    throw validation_error("multiple tables");
-                }
                 tables.push_back(table);
             } else if (std::holds_alternative<std::shared_ptr<WasmMemory>>(
                            import)) {
@@ -424,10 +417,6 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
             uint8_t elem_type = *iter++;
             if (!is_reftype(elem_type)) {
                 throw validation_error("invalid table element type");
-            }
-
-            if (tables.size() >= 1) {
-                throw validation_error("multiple tables");
             }
 
             auto [initial, max] = get_memory_limits(iter);
