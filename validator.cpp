@@ -561,6 +561,30 @@ void Validator::validate(safe_byte_iterator &iter, const Signature &signature,
 
             using enum FCInstruction;
             switch (static_cast<FCInstruction>(byte)) {
+                case i32_trunc_sat_f32_s:
+                    apply({{valtype::f32}, {valtype::i32}});
+                    break;
+                case i32_trunc_sat_f32_u:
+                    apply({{valtype::f32}, {valtype::i32}});
+                    break;
+                case i32_trunc_sat_f64_s:
+                    apply({{valtype::f64}, {valtype::i32}});
+                    break;
+                case i32_trunc_sat_f64_u:
+                    apply({{valtype::f64}, {valtype::i32}});
+                    break;
+                case i64_trunc_sat_f32_s:
+                    apply({{valtype::f32}, {valtype::i64}});
+                    break;
+                case i64_trunc_sat_f32_u:
+                    apply({{valtype::f32}, {valtype::i64}});
+                    break;
+                case i64_trunc_sat_f64_s:
+                    apply({{valtype::f64}, {valtype::i64}});
+                    break;
+                case i64_trunc_sat_f64_u:
+                    apply({{valtype::f64}, {valtype::i64}});
+                    break;
                 case memory_init: {
                     uint32_t seg_idx = safe_read_leb128<uint32_t>(iter);
                     ensure(seg_idx < instance.data_segments.size(), "invalid segment index");

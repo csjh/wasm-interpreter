@@ -1169,6 +1169,17 @@ void Instance::interpret(uint8_t *iter, tape<WasmValue> &stack) {
         stack[-1] = stack[-1].type op(stack[0].type % (sizeof(type) * 8));     \
         break;                                                                 \
     }
+#define TRUNC_SAT(from, to)                                                    \
+    {                                                                          \
+        if (stack[-1].from < std::numeric_limits<to>::min()) {                 \
+            stack[-1].to = std::numeric_limits<to>::min();                     \
+        } else if (stack[-1].from > std::numeric_limits<to>::max()) {          \
+            stack[-1].to = std::numeric_limits<to>::max();                     \
+        } else {                                                               \
+            stack[-1].to = static_cast<to>(stack[-1].from);                    \
+        }                                                                      \
+        break;                                                                 \
+    }
 
 #define LOAD(type, memtype)                                                    \
     {                                                                          \
@@ -1548,6 +1559,14 @@ void Instance::interpret(uint8_t *iter, tape<WasmValue> &stack) {
             using enum FCInstruction;
 
             switch (static_cast<FCInstruction>(byte)) {
+                case i32_trunc_sat_f32_s: TRUNC_SAT(f32, i32);
+                case i32_trunc_sat_f32_u: TRUNC_SAT(f32, u32);
+                case i32_trunc_sat_f64_s: TRUNC_SAT(f64, i32);
+                case i32_trunc_sat_f64_u: TRUNC_SAT(f64, u32);
+                case i64_trunc_sat_f32_s: TRUNC_SAT(f32, i64);
+                case i64_trunc_sat_f32_u: TRUNC_SAT(f32, u64);
+                case i64_trunc_sat_f64_s: TRUNC_SAT(f64, i64);
+                case i64_trunc_sat_f64_u: TRUNC_SAT(f64, u64);
                 case memory_init: {
                     uint32_t seg_idx = read_leb128(iter);
                     uint32_t size = stack.pop().u32;

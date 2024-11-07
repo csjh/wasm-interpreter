@@ -327,8 +327,8 @@ enum class Instruction {
 };
 
 enum class FCInstruction {
-    // i32_trunc_sat_f32_s = 0x00, i32_trunc_sat_f32_u = 0x01, i32_trunc_sat_f64_s = 0x02, i32_trunc_sat_f64_u = 0x03,
-    // i64_trunc_sat_f32_s = 0x04, i64_trunc_sat_f32_u = 0x05, i64_trunc_sat_f64_s = 0x06, i64_trunc_sat_f64_u = 0x07,
+    i32_trunc_sat_f32_s = 0x00, i32_trunc_sat_f32_u = 0x01, i32_trunc_sat_f64_s = 0x02, i32_trunc_sat_f64_u = 0x03,
+    i64_trunc_sat_f32_s = 0x04, i64_trunc_sat_f32_u = 0x05, i64_trunc_sat_f64_s = 0x06, i64_trunc_sat_f64_u = 0x07,
 
     memory_init = 0x08, data_drop  = 0x09, memory_copy = 0x0a, memory_fill = 0x0b,
     table_init  = 0x0c, elem_drop  = 0x0d, table_copy  = 0x0e,
@@ -518,6 +518,14 @@ static std::string instructions[] = {
     [static_cast<uint8_t>(Instruction::multibyte)] = "multibyte"};
 
 static std::string multibyte_instructions[] = {
+    [static_cast<uint8_t>(FCInstruction::i32_trunc_sat_f32_s)] = "i32.trunc_sat_f32_s",
+    [static_cast<uint8_t>(FCInstruction::i32_trunc_sat_f32_u)] = "i32.trunc_sat_f32_u",
+    [static_cast<uint8_t>(FCInstruction::i32_trunc_sat_f64_s)] = "i32.trunc_sat_f64_s",
+    [static_cast<uint8_t>(FCInstruction::i32_trunc_sat_f64_u)] = "i32.trunc_sat_f64_u",
+    [static_cast<uint8_t>(FCInstruction::i64_trunc_sat_f32_s)] = "i64.trunc_sat_f32_s",
+    [static_cast<uint8_t>(FCInstruction::i64_trunc_sat_f32_u)] = "i64.trunc_sat_f32_u",
+    [static_cast<uint8_t>(FCInstruction::i64_trunc_sat_f64_s)] = "i64.trunc_sat_f64_s",
+    [static_cast<uint8_t>(FCInstruction::i64_trunc_sat_f64_u)] = "i64.trunc_sat_f64_u",
     [static_cast<uint8_t>(FCInstruction::memory_init)] = "memory.init",
     [static_cast<uint8_t>(FCInstruction::data_drop)] = "data.drop",
     [static_cast<uint8_t>(FCInstruction::memory_copy)] = "memory.copy",
