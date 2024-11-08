@@ -696,14 +696,8 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
     skip_custom_section();
 
     // data count section
-    section(12, [&] {
-        ++iter;
-        uint32_t section_length = safe_read_leb128<uint32_t>(iter);
-        if (!iter.has_n_left(section_length)) {
-            throw malformed_error("unexpected end of section or function");
-        }
-
-        iter += section_length;
+    section(12, [&] { /* uint32_t n_data = */
+                      safe_read_leb128<uint32_t>(iter);
     });
 
     skip_custom_section();
