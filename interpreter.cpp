@@ -331,10 +331,8 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
 
                 auto table = std::get<std::shared_ptr<WasmTable>>(import);
                 auto [initial, max] = get_table_limits(iter);
-                if (table->size() < initial) {
-                    throw link_error("incompatible import type");
-                }
-                if (table->max() > max) {
+                if (table->size() < initial || table->max() > max ||
+                    table->type != static_cast<valtype>(reftype)) {
                     throw link_error("incompatible import type");
                 }
                 tables.push_back(table);
