@@ -435,6 +435,11 @@ template <typename T> class tape {
     T *end() { return ptr; }
 };
 
+struct ElementSegment {
+    valtype type;
+    std::vector<WasmValue> elements;
+};
+
 class Instance {
     friend class Validator;
 
@@ -468,7 +473,7 @@ class Instance {
     // value of globals
     std::vector<std::shared_ptr<WasmGlobal>> globals;
     // maps element indices to the element initializers
-    std::vector<std::vector<WasmValue>> elements;
+    std::vector<ElementSegment> elements;
     // types from type section
     std::vector<Signature> types;
     // exports from export section
