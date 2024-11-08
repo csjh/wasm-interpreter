@@ -1339,6 +1339,15 @@ void Instance::interpret(uint8_t *iter, tape<WasmValue> &stack) {
                 stack[-1] = stack[0];
             break;
         }
+        case select_t: {
+            /* uint32_t n_results = */ read_leb128(iter);
+            // skip result types
+            iter++;
+            stack -= 2;
+            if (!stack[1].i32)
+                stack[-1] = stack[0];
+            break;
+        }
         case localget:
             stack.push(frame().locals[read_leb128(iter)]);
             break;

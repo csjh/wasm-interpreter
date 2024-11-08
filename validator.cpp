@@ -294,6 +294,23 @@ void Validator::validate(safe_byte_iterator &iter, const Signature &signature,
             ensure(stack.size() >= 3, "type mismatch");
             // first pop the condition
             stack.pop(valtype::i32);
+
+            valtype ty = stack.back();
+            ensure(ty == valtype::empty || is_numtype(ty), "type mismatch");
+
+            // then apply the dynamic type
+            apply({{ty, ty}, {ty}});
+            break;
+        }
+        case select_t: {
+            uint32_t n_results = safe_read_leb128<uint32_t>(iter);
+            ensure(n_results == 1, "invalid result arity");
+            uint32_t maybe_valtype = *iter++;
+            ensure(is_valtype(maybe_valtype), "invalid result type");
+
+            ensure(stack.size() >= 3, "type mismatch");
+            // first pop the condition
+            stack.pop(valtype::i32);
             valtype ty = stack.back();
             // then apply the dynamic type
             apply({{ty, ty}, {ty}});

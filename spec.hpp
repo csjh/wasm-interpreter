@@ -50,25 +50,32 @@ enum class valtype : uint8_t {
     externref = 0x6f,
 };
 
-static inline bool is_reftype(valtype type) {
-    return type == valtype::funcref || type == valtype::externref;
-}
-
 static inline bool is_reftype(uint32_t byte) {
     return byte == static_cast<uint8_t>(valtype::funcref) ||
            byte == static_cast<uint8_t>(valtype::externref);
 }
 
-static inline bool is_valtype(valtype type) {
-    return type == valtype::i32 || type == valtype::i64 ||
-           type == valtype::f32 || type == valtype::f64 || is_reftype(type);
+static inline bool is_reftype(valtype type) {
+    return is_reftype(static_cast<uint8_t>(type));
 }
 
-static inline bool is_valtype(uint32_t byte) {
+static inline bool is_numtype(uint32_t byte) {
     return byte == static_cast<uint8_t>(valtype::i32) ||
            byte == static_cast<uint8_t>(valtype::i64) ||
            byte == static_cast<uint8_t>(valtype::f32) ||
-           byte == static_cast<uint8_t>(valtype::f64) || is_reftype(byte);
+           byte == static_cast<uint8_t>(valtype::f64);
+}
+
+static inline bool is_numtype(valtype type) {
+    return is_numtype(static_cast<uint8_t>(type));
+}
+
+static inline bool is_valtype(uint32_t byte) {
+    return is_numtype(byte) || is_reftype(byte);
+}
+
+static inline bool is_valtype(valtype type) {
+    return is_valtype(static_cast<uint8_t>(type));
 }
 
 struct Signature {
@@ -221,8 +228,9 @@ enum class Instruction {
 
     // insert return call here
 
-    drop   = 0x1a,
-    select = 0x1b,
+    drop     = 0x1a,
+    select   = 0x1b,
+    select_t = 0x1c,
 
     // insert some rando instructions here
 
@@ -362,6 +370,7 @@ static std::string instructions[] = {
     [static_cast<uint8_t>(Instruction::return_)] = "return",
     [static_cast<uint8_t>(Instruction::drop)] = "drop",
     [static_cast<uint8_t>(Instruction::select)] = "select",
+    [static_cast<uint8_t>(Instruction::select_t)] = "select_t",
     [static_cast<uint8_t>(Instruction::localget)] = "local.get",
     [static_cast<uint8_t>(Instruction::localset)] = "local.set",
     [static_cast<uint8_t>(Instruction::localtee)] = "local.tee",
