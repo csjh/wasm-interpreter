@@ -1554,7 +1554,7 @@ void Instance::interpret(uint8_t *iter, tape<WasmValue> &stack) {
         // bitwise comparison applies to both
         case ref_eq: BINARY_OP(externref, ==);
         case multibyte: {
-            byte = *iter++;
+            uint8_t byte = read_leb128(iter);
 #if WASM_DEBUG
             std::cerr << "reading multibyte instruction " << multibyte_instructions[byte].c_str()
                       << " at " << iter - bytes.get() << std::endl;
@@ -1572,14 +1572,12 @@ void Instance::interpret(uint8_t *iter, tape<WasmValue> &stack) {
                 case i64_trunc_sat_f64_u: TRUNC_SAT(f64, u64);
                 case memory_init: {
                     uint32_t seg_idx = read_leb128(iter);
+                    iter++;
                     uint32_t size = stack.pop().u32;
                     uint32_t offset = stack.pop().u32;
                     uint32_t dest = stack.pop().u32;
-                    if (dest + size > memory->size() * WasmMemory::PAGE_SIZE) {
+                    if (dest + size > memory->size() * WasmMemory::PAGE_SIZE || offset + size > data_segments[seg_idx].data.size()) {
                         trap("out of bounds memory access");
-                    }
-                    if (offset + size > data_segments[seg_idx].data.size()) {
-                        trap("offset outside of data segment");
                     }
                     memory->copy_into(dest, data_segments[seg_idx].data.data() + offset, size);
                     break;
@@ -1590,6 +1588,8 @@ void Instance::interpret(uint8_t *iter, tape<WasmValue> &stack) {
                     break;
                 }
                 case memory_copy: {
+                    /* uint32_t mem_idx = */ read_leb128(iter);
+                    /* uint32_t mem_idx = */ read_leb128(iter);
                     uint32_t size = stack.pop().u32;
                     uint32_t src = stack.pop().u32;
                     uint32_t dst = stack.pop().u32;
@@ -1597,9 +1597,10 @@ void Instance::interpret(uint8_t *iter, tape<WasmValue> &stack) {
                     break;
                 }
                 case memory_fill: {
+                    /* uint32_t mem_idx = */ read_leb128(iter);
+                    uint32_t size = stack.pop().u32;
                     uint32_t value = stack.pop().u32;
                     uint32_t ptr = stack.pop().u32;
-                    uint32_t size = stack.pop().u32;
                     memory->memset(ptr, value, size);
                     break;
                 }
@@ -1698,11 +1699,12 @@ WasmMemory::~WasmMemory() {
 uint32_t WasmMemory::grow(uint32_t delta) {
     if (delta == 0)
         return current;
-    uint32_t new_current = current + delta;
-    if (new_current > maximum) {
+    // subtraction to avoid overflow
+    if (delta > maximum - current) {
         return -1;
     }
 
+    uint32_t new_current = current + delta;
     uint8_t *new_memory = (uint8_t *)realloc(memory, new_current * PAGE_SIZE);
     if (new_memory == NULL)
         return -1;
@@ -1722,8 +1724,8 @@ void WasmMemory::copy_into(uint32_t ptr, const uint8_t *data, uint32_t length) {
 }
 
 void WasmMemory::memcpy(uint32_t dst, uint32_t src, uint32_t length) {
-    if (dst + length > current * PAGE_SIZE ||
-        src + length > current * PAGE_SIZE) {
+    if (static_cast<uint64_t>(dst) + length > current * PAGE_SIZE ||
+        static_cast<uint64_t>(src) + length > current * PAGE_SIZE) {
         trap("out of bounds memory access");
     }
     std::memmove(memory + dst, memory + src, length);
