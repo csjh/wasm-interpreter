@@ -127,15 +127,15 @@ template <> struct adl_serializer<invoke_action> {
 };
 } // namespace nlohmann
 
-using action = std::variant<get_action, invoke_action>;
+using act = std::variant<get_action, invoke_action>;
 
 namespace nlohmann {
-template <> struct adl_serializer<action> {
-    static void to_json(json &j, const action &opt) {
+template <> struct adl_serializer<act> {
+    static void to_json(json &j, const act &opt) {
         std::visit([&j](auto &&arg) { j = arg; }, opt);
     }
 
-    static void from_json(const json &j, action &opt) {
+    static void from_json(const json &j, act &opt) {
         if (j["type"] == "get") {
             opt = j.get<get_action>();
         } else if (j["type"] == "invoke") {
@@ -230,7 +230,7 @@ template <> struct adl_serializer<test_register> {
 struct test_return {
     std::string type;
     int line;
-    action action;
+    act action;
     std::vector<value> expected;
 };
 
@@ -239,7 +239,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(test_return, type, line, action, expected)
 struct test_action {
     std::string type;
     int line;
-    action action;
+    act action;
     std::vector<value> expected;
 };
 
@@ -259,7 +259,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(test_invalid, type, line, filename, text,
 struct test_trap {
     std::string type;
     int line;
-    action action;
+    act action;
     std::string text;
     std::vector<only_type> expected;
 };
@@ -270,7 +270,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(test_trap, type, line, action, text,
 struct test_exhaustion {
     std::string type;
     int line;
-    action action;
+    act action;
     std::string text;
     std::vector<only_type> expected;
 };
@@ -435,7 +435,7 @@ int main(int argv, char **argc) {
 
     mitey::Imports imports{{"spectest", spectest}};
 
-    auto execute_action = [&](const action &a) {
+    auto execute_action = [&](const act &a) {
         if (std::holds_alternative<get_action>(a)) {
             auto &action = std::get<get_action>(a);
             return std::vector{
