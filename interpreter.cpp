@@ -1656,8 +1656,8 @@ void Instance::interpret(uint8_t *iter, tape<WasmValue> &stack) {
                     break;
                 }
                 case table_copy: {
-                    uint32_t src_table = read_leb128(iter);
                     uint32_t dst_table = read_leb128(iter);
+                    uint32_t src_table = read_leb128(iter);
                     uint32_t size = stack.pop().u32;
                     uint32_t src = stack.pop().u32;
                     uint32_t dst = stack.pop().u32;
