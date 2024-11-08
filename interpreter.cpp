@@ -1315,6 +1315,9 @@ void Instance::interpret(uint8_t *iter, tape<WasmValue> &stack) {
             uint32_t table_idx = read_leb128(iter);
             uint32_t elem_idx = stack.pop().u32;
 
+            if (elem_idx >= tables[table_idx]->size()) {
+                trap("undefined element");
+            }
             Funcref funcref = tables[table_idx]->get(elem_idx);
             if (!funcref) {
                 trap("uninitialized element");
@@ -1582,12 +1585,12 @@ void Instance::interpret(uint8_t *iter, tape<WasmValue> &stack) {
                     uint32_t seg_idx = read_leb128(iter);
                     iter++;
                     uint32_t size = stack.pop().u32;
-                    uint32_t offset = stack.pop().u32;
+                    uint32_t src = stack.pop().u32;
                     uint32_t dest = stack.pop().u32;
-                    if (dest + size > memory->size() * WasmMemory::PAGE_SIZE || offset + size > data_segments[seg_idx].data.size()) {
+                    if (dest + size > memory->size() * WasmMemory::PAGE_SIZE || src + size > data_segments[seg_idx].data.size()) {
                         trap("out of bounds memory access");
                     }
-                    memory->copy_into(dest, data_segments[seg_idx].data.data() + offset, size);
+                    memory->copy_into(dest, data_segments[seg_idx].data.data() + src, size);
                     break;
                 }
                 case data_drop: {
@@ -1659,9 +1662,9 @@ void Instance::interpret(uint8_t *iter, tape<WasmValue> &stack) {
                 }
                 case table_fill: {
                     uint32_t table_idx = read_leb128(iter);
+                    uint32_t size = stack.pop().u32;
                     WasmValue value = stack.pop();
                     uint32_t ptr = stack.pop().u32;
-                    uint32_t size = stack.pop().u32;
                     tables[table_idx]->memset(ptr, value, size);
                     break;
                 }
@@ -1725,7 +1728,7 @@ uint32_t WasmMemory::grow(uint32_t delta) {
 }
 
 void WasmMemory::copy_into(uint32_t ptr, const uint8_t *data, uint32_t length) {
-    if (ptr + length > current * PAGE_SIZE) {
+    if (static_cast<uint64_t>(ptr) + length > current * PAGE_SIZE) {
         trap("out of bounds memory access");
     }
     std::memcpy(memory + ptr, data, length);
@@ -1740,7 +1743,7 @@ void WasmMemory::memcpy(uint32_t dst, uint32_t src, uint32_t length) {
 }
 
 void WasmMemory::memset(uint32_t dst, uint8_t value, uint32_t length) {
-    if (dst + length > current * PAGE_SIZE) {
+    if (static_cast<uint64_t>(dst) + length > current * PAGE_SIZE) {
         trap("out of bounds memory access");
     }
     std::memset(memory + dst, value, length);
@@ -1783,11 +1786,7 @@ uint32_t WasmTable::grow(uint32_t delta, WasmValue value) {
 
 WasmValue WasmTable::get(uint32_t idx) {
     if (idx >= current) {
-        if (type == valtype::funcref) {
-            trap("undefined element");
-        } else {
-            trap("out of bounds table access");
-        }
+        trap("out of bounds table access");
     }
     return elements[idx];
 }
@@ -1801,7 +1800,7 @@ void WasmTable::set(uint32_t idx, WasmValue value) {
 
 void WasmTable::copy_into(uint32_t dst, const WasmValue *data,
                           uint32_t length) {
-    if (dst + length > current) {
+    if (static_cast<uint64_t>(dst) + length > current) {
         trap("out of bounds table access");
     }
     std::memcpy(elements + dst, data, length * sizeof(WasmValue));
@@ -1809,7 +1808,8 @@ void WasmTable::copy_into(uint32_t dst, const WasmValue *data,
 
 void WasmTable::memcpy(WasmTable &dst_table, uint32_t dst, uint32_t src,
                        uint32_t length) {
-    if (dst + length > dst_table.current || src + length > this->current) {
+    if (static_cast<uint64_t>(dst) + length > dst_table.current ||
+        static_cast<uint64_t>(src) + length > this->current) {
         trap("out of bounds table access");
     }
     std::memmove(dst_table.elements + dst, elements + src,
@@ -1817,7 +1817,7 @@ void WasmTable::memcpy(WasmTable &dst_table, uint32_t dst, uint32_t src,
 }
 
 void WasmTable::memset(uint32_t dst, WasmValue value, uint32_t length) {
-    if (dst + length > current) {
+    if (static_cast<uint64_t>(dst) + length > current) {
         trap("out of bounds table access");
     }
     std::fill(elements + dst, elements + dst + length, value);

@@ -593,17 +593,17 @@ void Validator::validate(safe_byte_iterator &iter, const Signature &signature,
                     break;
                 case memory_init: {
                     uint32_t seg_idx = safe_read_leb128<uint32_t>(iter);
-                    ensure(seg_idx < instance.data_segments.size(), "invalid segment index");
-
                     if (*iter++ != 0) throw malformed_error("zero flag expected");
+
                     ensure(instance.memory != nullptr, "unknown memory 0");
+                    ensure(seg_idx < instance.data_segments.size(), "unknown data segment");
 
                     apply({{valtype::i32, valtype::i32, valtype::i32}, {}});
                     break;
                 }
                 case data_drop: {
                     uint32_t seg_idx = safe_read_leb128<uint32_t>(iter);
-                    ensure(seg_idx < instance.data_segments.size(), "invalid segment index");
+                    ensure(seg_idx < instance.data_segments.size(), "unknown data segment");
                     break;
                 }
                 case memory_copy: {
@@ -622,17 +622,19 @@ void Validator::validate(safe_byte_iterator &iter, const Signature &signature,
                     break;
                 }
                 case table_init: {
-                    uint32_t table_idx = safe_read_leb128<uint32_t>(iter);
-                    ensure(table_idx < instance.tables.size(), "unknown table");
                     uint32_t seg_idx = safe_read_leb128<uint32_t>(iter);
-                    ensure(seg_idx < instance.elements.size(), "invalid segment index");
+                    uint32_t table_idx = safe_read_leb128<uint32_t>(iter);
+
+                    ensure(table_idx < instance.tables.size(), "unknown table " + std::to_string(table_idx));
+                    ensure(seg_idx < instance.elements.size(), "unknown data segment");
+                    ensure(instance.tables[table_idx]->type == instance.elements[seg_idx].type, "type mismatch");
 
                     apply({{valtype::i32, valtype::i32, valtype::i32}, {}});
                     break;
                 }
                 case elem_drop: {
                     uint32_t seg_idx = safe_read_leb128<uint32_t>(iter);
-                    ensure(seg_idx < instance.elements.size(), "invalid segment index");
+                    ensure(seg_idx < instance.elements.size(), "unknown elem segment " + std::to_string(seg_idx));
                     break;
                 }
                 case table_copy: {
