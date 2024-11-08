@@ -65,8 +65,8 @@ class WasmMemory {
     uint32_t maximum;
 
   public:
-    static const uint32_t MAX_PAGES = 65536;
-    static const uint32_t PAGE_SIZE = 65536;
+    static constexpr uint32_t MAX_PAGES = 65536;
+    static constexpr uint32_t PAGE_SIZE = 65536;
 
     WasmMemory();
     WasmMemory(uint32_t initial, uint32_t maximum);
