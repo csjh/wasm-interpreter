@@ -322,7 +322,8 @@ enum class Instruction {
     i32reinterpret_f32 = 0xbc, f32reinterpret_i32 = 0xbe,
     i64reinterpret_f64 = 0xbd, f64reinterpret_i64 = 0xbf,
 
-    // insert sign extension proposal here
+    i32extend8_s = 0xc0, i32extend16_s = 0xc1,
+    i64extend8_s = 0xc2, i64extend16_s = 0xc3, i64extend32_s = 0xc4,
 
     ref_null = 0xd0, ref_is_null = 0xd1, ref_func = 0xd2,
 
@@ -520,6 +521,11 @@ static std::string instructions[] = {
     [static_cast<uint8_t>(Instruction::i64reinterpret_f64)] = "i64.reinterpret_f64",
     [static_cast<uint8_t>(Instruction::f32reinterpret_i32)] = "f32.reinterpret_i32",
     [static_cast<uint8_t>(Instruction::f64reinterpret_i64)] = "f64.reinterpret_i64",
+    [static_cast<uint8_t>(Instruction::i32extend8_s)] = "i32.extend8_s",
+    [static_cast<uint8_t>(Instruction::i32extend16_s)] = "i32.extend16_s",
+    [static_cast<uint8_t>(Instruction::i64extend8_s)] = "i64.extend8_s",
+    [static_cast<uint8_t>(Instruction::i64extend16_s)] = "i64.extend16_s",
+    [static_cast<uint8_t>(Instruction::i64extend32_s)] = "i64.extend32_s",
     [static_cast<uint8_t>(Instruction::ref_null)] = "ref.null",
     [static_cast<uint8_t>(Instruction::ref_is_null)] = "ref.is_null",
     [static_cast<uint8_t>(Instruction::ref_func)] = "ref.func",

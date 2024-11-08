@@ -1531,6 +1531,11 @@ void Instance::interpret(uint8_t *iter, tape<WasmValue> &stack) {
         case f32reinterpret_i32: break;
         case i64reinterpret_f64: break;
         case f64reinterpret_i64: break;
+        case i32extend8_s:  UNARY_OP(i32, (int32_t)(int8_t));
+        case i32extend16_s: UNARY_OP(i32, (int32_t)(int16_t));
+        case i64extend8_s:  UNARY_OP(i64, (int64_t)(int8_t));
+        case i64extend16_s: UNARY_OP(i64, (int64_t)(int16_t));
+        case i64extend32_s: UNARY_OP(i64, (int64_t)(int32_t));
         case ref_null: {
             read_leb128(iter);
             stack.push((void*)nullptr);

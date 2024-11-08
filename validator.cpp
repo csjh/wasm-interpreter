@@ -528,6 +528,11 @@ void Validator::validate(safe_byte_iterator &iter, const Signature &signature,
         case f32reinterpret_i32: apply({{valtype::i32}, {valtype::f32}}); break;
         case i64reinterpret_f64: apply({{valtype::f64}, {valtype::i64}}); break;
         case f64reinterpret_i64: apply({{valtype::i64}, {valtype::f64}}); break;
+        case i32extend8_s:  apply({{valtype::i32}, {valtype::i32}}); break;
+        case i32extend16_s: apply({{valtype::i32}, {valtype::i32}}); break;
+        case i64extend8_s:  apply({{valtype::i64}, {valtype::i64}}); break;
+        case i64extend16_s: apply({{valtype::i64}, {valtype::i64}}); break;
+        case i64extend32_s: apply({{valtype::i64}, {valtype::i64}}); break;
         case ref_null: {
             uint32_t type_idx = safe_read_leb128<uint32_t>(iter);
             ensure(is_reftype(type_idx), "type mismatch");
