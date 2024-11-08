@@ -281,7 +281,7 @@ void Validator::validate(safe_byte_iterator &iter, const Signature &signature,
             uint32_t table_idx = safe_read_leb128<uint32_t>(iter);
             ensure(table_idx < instance.tables.size(), "unknown table");
             ensure(instance.tables[table_idx]->type == valtype::funcref,
-                   "invalid table type for call_indirect");
+                   "type mismatch");
 
             apply(instance.types[type_idx]);
             break;
@@ -595,7 +595,7 @@ void Validator::validate(safe_byte_iterator &iter, const Signature &signature,
                     ensure(seg_idx < instance.data_segments.size(), "invalid segment index");
 
                     if (*iter++ != 0) throw malformed_error("zero flag expected");
-                    ensure(instance.memory != nullptr, "unknown memory");
+                    ensure(instance.memory != nullptr, "unknown memory 0");
 
                     apply({{valtype::i32, valtype::i32, valtype::i32}, {}});
                     break;
@@ -608,14 +608,14 @@ void Validator::validate(safe_byte_iterator &iter, const Signature &signature,
                 case memory_copy: {
                     if (*iter++ != 0) throw malformed_error("zero flag expected");
                     if (*iter++ != 0) throw malformed_error("zero flag expected");
-                    ensure(instance.memory != nullptr, "unknown memory");
+                    ensure(instance.memory != nullptr, "unknown memory 0");
 
                     apply({{valtype::i32, valtype::i32, valtype::i32}, {}});
                     break;
                 }
                 case memory_fill: {
                     if (*iter++ != 0) throw malformed_error("zero flag expected");
-                    ensure(instance.memory != nullptr, "unknown memory");
+                    ensure(instance.memory != nullptr, "unknown memory 0");
 
                     apply({{valtype::i32, valtype::i32, valtype::i32}, {}});
                     break;
@@ -639,6 +639,7 @@ void Validator::validate(safe_byte_iterator &iter, const Signature &signature,
                     ensure(src_table_idx < instance.tables.size(), "unknown table");
                     uint32_t dst_table_idx = safe_read_leb128<uint32_t>(iter);
                     ensure(dst_table_idx < instance.tables.size(), "unknown table");
+                    ensure(instance.tables[src_table_idx]->type == instance.tables[dst_table_idx]->type, "type mismatch");
 
                     apply({{valtype::i32, valtype::i32, valtype::i32}, {}});
                     break;

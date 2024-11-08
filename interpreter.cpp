@@ -173,7 +173,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
             uint32_t name_length = safe_read_leb128<uint32_t>(iter);
             if (!is_valid_utf8(iter.get_with_at_least(name_length),
                                (iter + name_length).unsafe_ptr())) {
-                throw malformed_error("invalid UTF-8 encoding");
+                throw malformed_error("malformed UTF-8 encoding");
             }
 
             if (start + section_length < iter) {
@@ -223,7 +223,8 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
             }
 
             if (*iter != 0x60) {
-                throw validation_error("invalid function type");
+                throw malformed_error("integer representation too long");
+                // throw validation_error("invalid function type");
             }
             ++iter;
 
@@ -275,7 +276,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
             uint32_t module_len = safe_read_leb128<uint32_t>(iter);
             if (!is_valid_utf8(iter.get_with_at_least(module_len),
                                (iter + module_len).unsafe_ptr())) {
-                throw malformed_error("invalid UTF-8 encoding");
+                throw malformed_error("malformed UTF-8 encoding");
             }
             std::string module(
                 reinterpret_cast<char *>(iter.get_with_at_least(module_len)),
@@ -285,7 +286,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
             uint32_t field_len = safe_read_leb128<uint32_t>(iter);
             if (!is_valid_utf8(iter.get_with_at_least(field_len),
                                (iter + field_len).unsafe_ptr())) {
-                throw malformed_error("invalid UTF-8 encoding");
+                throw malformed_error("malformed UTF-8 encoding");
             }
             std::string field(
                 reinterpret_cast<char *>(iter.get_with_at_least(field_len)),
@@ -362,7 +363,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
                 }
                 uint8_t mut = *iter++;
                 if (!is_mut(mut)) {
-                    throw malformed_error("invalid mutability");
+                    throw malformed_error("malformed mutability");
                 }
 
                 auto global = std::get<std::shared_ptr<WasmGlobal>>(import);
@@ -466,7 +467,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
 
             uint8_t maybe_mut = *iter++;
             if (!is_mut(maybe_mut)) {
-                throw malformed_error("invalid mutability");
+                throw malformed_error("malformed mutability");
             }
             mut global_mut = static_cast<mut>(maybe_mut);
 
@@ -516,10 +517,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
                 }
                 exports[name] = tables[idx];
             } else if (export_desc == ExportDesc::mem) {
-                if (!memory) {
-                    throw validation_error("no memory to export");
-                }
-                if (idx != 0) {
+                if (idx != 0 || !memory) {
                     throw validation_error("unknown memory");
                 }
                 exports[name] = memory;
@@ -777,10 +775,8 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
                 segment_flag & 0b10 ? safe_read_leb128<uint32_t>(iter) : 0;
 
             if (memidx != 0) {
-                throw validation_error("non-zero memory index");
-            }
-            if (!memory) {
-                throw validation_error("unknown memory");
+                throw validation_error("unknown memory " +
+                                       std::to_string(memidx));
             }
 
             if (segment_flag & 1) {
@@ -799,6 +795,9 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
                 data_segments.emplace_back(Segment{memidx, std::move(data)});
             } else {
                 // active segment
+                if (!memory) {
+                    throw validation_error("unknown memory 0");
+                }
 
                 // larger data type to account for potential addition overflow
                 uint64_t offset = interpret_const(iter, valtype::i32).u32;
@@ -828,7 +827,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
     skip_custom_section();
 
     if (!iter.empty()) {
-        throw malformed_error("invalid section id");
+        throw malformed_error("malformed section id");
     }
 
     Validator(*this).validate(bytes.get() + length);
@@ -1002,7 +1001,8 @@ WasmValue Instance::interpret_const(safe_byte_iterator &iter,
         case globalget: {
             uint32_t global_idx = safe_read_leb128<uint32_t>(iter);
             if (global_idx >= globals.size()) {
-                throw validation_error("unknown global");
+                throw validation_error("unknown global " +
+                                       std::to_string(global_idx));
             }
             stack.push(globals[global_idx]->value);
             stack_types.push_back(globals[global_idx]->type);
@@ -1774,7 +1774,11 @@ uint32_t WasmTable::grow(uint32_t delta, WasmValue value) {
 
 WasmValue WasmTable::get(uint32_t idx) {
     if (idx >= current) {
-        trap("undefined element");
+        if (type == valtype::funcref) {
+            trap("undefined element");
+        } else {
+            trap("out of bounds table access");
+        }
     }
     return elements[idx];
 }
