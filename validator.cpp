@@ -34,22 +34,39 @@ void Validator::validate(uint8_t *end) {
 class WasmStack : protected std::vector<valtype> {
     bool polymorphized = false;
 
+    class infinite_iterator {
+        std::vector<valtype>::const_reverse_iterator start, end;
+
+      public:
+        infinite_iterator(const std::vector<valtype> &vec)
+            : start(vec.rbegin()), end(vec.rend()) {}
+
+        valtype operator*() const {
+            if (start == end)
+                return valtype::empty;
+            return *start;
+        }
+        infinite_iterator &operator++() {
+            if (start != end)
+                ++start;
+            return *this;
+        }
+    };
+
+    infinite_iterator rbegin() const { return infinite_iterator(*this); }
+
+  public:
     bool check(const std::vector<valtype> &expected) {
+        // this guarantees non-polymorphized stacks don't accidentally use the
+        // valtype::empty from the infinite_iterator
         if (expected.size() > size())
             return false;
 
-        // due to stack polymorphism there might only be a few actual types on
-        // the stack
-        auto materialized =
-            std::min(std::vector<valtype>::size(), expected.size());
-        if (!std::equal(expected.rbegin(), expected.rbegin() + materialized,
-                        rbegin()))
-            return false;
-
-        return true;
+        return std::equal(
+            expected.rbegin(), expected.rend(), rbegin(),
+            [](valtype a, valtype b) { return b == valtype::empty || a == b; });
     }
 
-  public:
     bool operator==(const std::vector<valtype> &rhs) {
         return check(rhs) && (rhs.size() >= std::vector<valtype>::size());
     }
@@ -77,12 +94,13 @@ class WasmStack : protected std::vector<valtype> {
         return !polymorphized && std::vector<valtype>::empty();
     }
 
+    bool can_be_anything() const {
+        return polymorphized && std::vector<valtype>::empty();
+    }
+
     valtype back() const {
         ensure(!empty(), "type mismatch");
-        // default to i32, shouldn't really matter
-        return std::vector<valtype>::empty() && polymorphized
-                   ? valtype::i32
-                   : std::vector<valtype>::back();
+        return *rbegin();
     }
 
     unsigned long size() const {
@@ -247,15 +265,21 @@ void Validator::validate(safe_byte_iterator &iter, const Signature &signature,
             std::vector<uint32_t> targets;
             for (uint32_t i = 0; i <= n_targets; ++i) {
                 uint32_t target = safe_read_leb128<uint32_t>(iter);
-                check_br(target);
+                ensure(target < control_stack.size(), "unknown label");
                 targets.push_back(target);
             }
-            auto &expected_at_default =
+            auto &default_target =
                 control_stack[control_stack.size() - targets.back() - 1];
-            for (uint32_t i = 0; i < n_targets; ++i) {
-                ensure(expected_at_default ==
-                           control_stack[control_stack.size() - targets[i] - 1],
-                       "type mismatch");
+            for (uint32_t depth : targets) {
+                auto target = control_stack[control_stack.size() - depth - 1];
+                if (stack.can_be_anything()) {
+                    ensure(stack.check(target), "type mismatch");
+                    ensure(default_target.size() == target.size(),
+                           "type mismatch");
+                } else {
+                    check_br(depth);
+                    ensure(default_target == target, "type mismatch");
+                }
             }
             stack.polymorphize();
             break;
@@ -558,7 +582,7 @@ void Validator::validate(safe_byte_iterator &iter, const Signature &signature,
         }
         case ref_is_null: {
             valtype peek = stack.back();
-            ensure(is_reftype(peek), "type mismatch");
+            ensure(peek == valtype::empty || is_reftype(peek), "type mismatch");
             apply({{peek}, {valtype::i32}});
             break;
         }
@@ -571,7 +595,7 @@ void Validator::validate(safe_byte_iterator &iter, const Signature &signature,
         }
         case ref_eq: {
             valtype peek = stack.back();
-            ensure(is_reftype(peek), "type mismatch");
+            ensure(peek == valtype::empty || is_reftype(peek), "type mismatch");
             apply({{peek, peek}, {valtype::i32}});
             break;
         }
