@@ -548,6 +548,7 @@ void Validator::validate(safe_byte_iterator &iter, const Signature &signature,
         case ref_func: {
             uint32_t func_idx = safe_read_leb128<uint32_t>(iter);
             ensure(func_idx < instance.functions.size(), "invalid function index");
+            ensure(instance.funcrefs[func_idx].instance != nullptr, "undeclared function reference");
             apply({{}, {valtype::funcref}});
             break;
         }

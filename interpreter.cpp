@@ -400,7 +400,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
 
     for (uint32_t i = 0; i < functions.size(); i++) {
         funcrefs.push_back(
-            IndirectFunction{this, i, functions[i].type.typeidx});
+            IndirectFunction{nullptr, i, functions[i].type.typeidx});
     }
 
     skip_custom_section();
@@ -509,6 +509,8 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
                 if (idx >= functions.size()) {
                     throw validation_error("unknown function");
                 }
+                // implicit reference declaration
+                funcrefs[idx].instance = this;
                 const auto &fn = functions[idx];
                 exports[name] = externalize_function(fn);
             } else if (export_desc == ExportDesc::table) {
@@ -563,19 +565,17 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
 
             if (flags & 1) {
                 if (flags & 0b10) {
-                    // i don't know what declarative is for but i have to skip
-                    // the bytes somehow
                     if (flags & 0b100) {
                         // flags = 7
                         // characteristics: declarative, elem type + exprs
-                        uint32_t reftype = *iter++;
-                        if (!is_reftype(reftype)) {
+                        uint32_t maybe_reftype = *iter++;
+                        if (!is_reftype(maybe_reftype)) {
                             throw validation_error("invalid reftype");
                         }
+                        valtype reftype = static_cast<valtype>(maybe_reftype);
                         uint32_t n_elements = safe_read_leb128<uint32_t>(iter);
                         for (uint32_t j = 0; j < n_elements; j++) {
-                            interpret_const(iter,
-                                            static_cast<valtype>(reftype));
+                            interpret_const(iter, reftype);
                         }
                     } else {
                         // flags = 3
@@ -591,6 +591,8 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
                             if (elem_idx >= functions.size()) {
                                 throw validation_error("unknown function");
                             }
+                            // implicit reference declaration
+                            funcrefs[elem_idx].instance = this;
                         }
                     }
                 } else {
@@ -624,6 +626,8 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
                                 throw validation_error("unknown function");
                             }
                             elem[j] = &funcrefs[elem_idx];
+                            // implicit reference declaration
+                            funcrefs[elem_idx].instance = this;
                         }
                         elements.emplace_back(
                             ElementSegment{valtype::funcref, elem});
@@ -680,6 +684,8 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
                             throw validation_error("unknown function");
                         }
                         WasmValue funcref = &funcrefs[elem_idx];
+                        // implicit reference declaration
+                        funcref.funcref->instance = this;
                         elem[j] = funcref;
                         if (offset + j >= tables[table_idx]->size()) {
                             throw uninstantiable_error(
@@ -1031,6 +1037,8 @@ WasmValue Instance::interpret_const(safe_byte_iterator &iter,
             if (func_idx >= functions.size()) {
                 throw validation_error("unknown function");
             }
+            // implicit reference declaration
+            funcrefs[func_idx].instance = this;
             stack.push(&funcrefs[func_idx]);
             stack_types.push_back(valtype::funcref);
             break;
