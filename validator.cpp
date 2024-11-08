@@ -576,7 +576,7 @@ void Validator::validate(safe_byte_iterator &iter, const Signature &signature,
             break;
         }
         case multibyte: {
-            uint8_t byte = *iter++;
+            uint32_t byte = safe_read_leb128<uint32_t>(iter);
 #if WASM_DEBUG
             std::cerr << "reading multibyte instruction " << multibyte_instructions[byte].c_str()
                       << " at " << iter - instance.bytes.get() << std::endl;

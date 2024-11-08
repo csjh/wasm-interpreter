@@ -420,7 +420,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
                 throw validation_error("invalid table element type");
             }
 
-            auto [initial, max] = get_memory_limits(iter);
+            auto [initial, max] = get_table_limits(iter);
             tables.emplace_back(std::make_shared<WasmTable>(
                 static_cast<valtype>(elem_type), initial, max));
         }
@@ -577,6 +577,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
                         for (uint32_t j = 0; j < n_elements; j++) {
                             interpret_const(iter, reftype);
                         }
+                        elements.emplace_back(ElementSegment{reftype, {}});
                     } else {
                         // flags = 3
                         // characteristics: declarative, elem kind + indices
@@ -594,6 +595,8 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
                             // implicit reference declaration
                             funcrefs[elem_idx].instance = this;
                         }
+                        elements.emplace_back(
+                            ElementSegment{valtype::funcref, {}});
                     }
                 } else {
                     if (flags & 0b100) {
@@ -660,6 +663,9 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
                         throw validation_error("invalid reftype");
                     }
                     reftype = static_cast<valtype>(reftype_or_elemkind);
+                    if (tables[table_idx]->type != reftype) {
+                        throw validation_error("type mismatch");
+                    }
                     for (uint32_t j = 0; j < n_elements; j++) {
                         WasmValue el = interpret_const(iter, reftype);
                         elem[j] = el;
@@ -676,6 +682,9 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
                         throw validation_error("invalid elemkind");
                     }
                     reftype = valtype::funcref;
+                    if (tables[table_idx]->type != reftype) {
+                        throw validation_error("type mismatch");
+                    }
                     // flags = 0 or 2
                     // characteristics: active, elem kind + indices
                     for (uint32_t j = 0; j < n_elements; j++) {
@@ -694,7 +703,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
                         tables[table_idx]->set(offset + j, funcref);
                     }
                 }
-                elements.emplace_back(ElementSegment{reftype, elem});
+                elements.emplace_back(ElementSegment{reftype, {}});
             }
         }
     });
@@ -822,7 +831,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
 
                 memory->copy_into(offset, data.data(), data_length);
 
-                data_segments.emplace_back(Segment{memidx, std::move(data)});
+                data_segments.emplace_back(Segment{memidx, {}});
             }
         }
     });
