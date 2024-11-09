@@ -46,7 +46,7 @@ safe_byte_iterator safe_byte_iterator::operator++(int) {
 
 safe_byte_iterator safe_byte_iterator::operator+(size_t n) const {
     if (iter + n > end) {
-        throw malformed_error("unexpected end");
+        throw malformed_error("length out of bounds");
     }
     return safe_byte_iterator(iter + n, end);
 }
@@ -709,9 +709,8 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
     skip_custom_section();
 
     // data count section
-    section(12, [&] { /* uint32_t n_data = */
-                      safe_read_leb128<uint32_t>(iter);
-    });
+    uint32_t n_data = std::numeric_limits<uint32_t>::max();
+    section(12, [&] { n_data = safe_read_leb128<uint32_t>(iter); });
 
     skip_custom_section();
 
@@ -769,7 +768,13 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
 
     // data section
     section(11, [&] {
-        uint32_t n_data = safe_read_leb128<uint32_t>(iter);
+        uint32_t section_n_data = safe_read_leb128<uint32_t>(iter);
+        if (n_data == std::numeric_limits<uint32_t>::max())
+            n_data = section_n_data;
+        if (n_data != section_n_data) {
+            throw malformed_error(
+                "data count and data section have inconsistent lengths");
+        }
 
         for (uint32_t i = 0; i < n_data; i++) {
             if (iter.empty()) {
