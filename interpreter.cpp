@@ -103,9 +103,9 @@ struct SignatureEquality {
 
 std::tuple<uint32_t, uint32_t> get_limits(safe_byte_iterator &iter,
                                           uint32_t upper_limit) {
-    uint32_t flags = safe_read_leb128<uint32_t>(iter);
+    uint32_t flags = safe_read_leb128<uint32_t, 1>(iter);
     if (flags != 0 && flags != 1) {
-        throw validation_error("invalid flags");
+        throw malformed_error("integer too large");
     }
     uint32_t initial = safe_read_leb128<uint32_t>(iter);
     uint32_t max = flags == 1 ? safe_read_leb128<uint32_t>(iter) : upper_limit;
@@ -191,7 +191,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
             ++iter;
             uint32_t section_length = safe_read_leb128<uint32_t>(iter);
             if (!iter.has_n_left(section_length)) {
-                throw malformed_error("unexpected end of section or function");
+                throw malformed_error("length out of bounds");
             }
             safe_byte_iterator section_start = iter;
 
@@ -200,6 +200,13 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
             if (iter - section_start != section_length) {
                 throw malformed_error("section size mismatch");
             }
+
+            // todo: remove this when validation separates
+            if (!iter.empty() && *iter == id) {
+                throw malformed_error("unexpected content after last section");
+            }
+        } else if (!iter.empty() && *iter > 12) {
+            throw malformed_error("malformed section id");
         } else {
             else_();
         }
@@ -326,7 +333,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
                 // table
                 uint32_t reftype = safe_read_leb128<uint32_t>(iter);
                 if (!is_reftype(reftype)) {
-                    throw validation_error("invalid reftype");
+                    throw malformed_error("malformed reference type");
                 }
 
                 auto table = std::get<std::shared_ptr<WasmTable>>(import);
@@ -568,7 +575,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
                         // characteristics: declarative, elem type + exprs
                         uint32_t maybe_reftype = *iter++;
                         if (!is_reftype(maybe_reftype)) {
-                            throw validation_error("invalid reftype");
+                            throw malformed_error("malformed reference type");
                         }
                         valtype reftype = static_cast<valtype>(maybe_reftype);
                         uint32_t n_elements = safe_read_leb128<uint32_t>(iter);
@@ -602,7 +609,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
                         // characteristics: passive, elem type + exprs
                         uint8_t maybe_reftype = *iter++;
                         if (!is_reftype(maybe_reftype)) {
-                            throw validation_error("invalid reftype");
+                            throw malformed_error("malformed reference type");
                         }
                         valtype reftype = static_cast<valtype>(maybe_reftype);
                         uint32_t n_elements = safe_read_leb128<uint32_t>(iter);
@@ -658,7 +665,7 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
                         reftype_or_elemkind =
                             static_cast<uint16_t>(valtype::funcref);
                     if (!is_reftype(reftype_or_elemkind)) {
-                        throw validation_error("invalid reftype");
+                        throw malformed_error("malformed reference type");
                     }
                     reftype = static_cast<valtype>(reftype_or_elemkind);
                     if (tables[table_idx]->type != reftype) {
@@ -767,82 +774,96 @@ Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
     skip_custom_section();
 
     // data section
-    section(11, [&] {
-        uint32_t section_n_data = safe_read_leb128<uint32_t>(iter);
-        if (n_data == std::numeric_limits<uint32_t>::max())
-            n_data = section_n_data;
-        if (n_data != section_n_data) {
-            throw malformed_error(
-                "data count and data section have inconsistent lengths");
-        }
-
-        for (uint32_t i = 0; i < n_data; i++) {
-            if (iter.empty()) {
-                throw malformed_error("unexpected end of section or function");
+    section(
+        11,
+        [&] {
+            uint32_t section_n_data = safe_read_leb128<uint32_t>(iter);
+            if (n_data == std::numeric_limits<uint32_t>::max())
+                n_data = section_n_data;
+            if (n_data != section_n_data) {
+                throw malformed_error(
+                    "data count and data section have inconsistent lengths");
             }
 
-            uint32_t segment_flag = safe_read_leb128<uint32_t>(iter);
-            if (segment_flag & ~0b11) {
-                throw validation_error("invalid data segment flag");
-            }
-
-            uint32_t memidx =
-                segment_flag & 0b10 ? safe_read_leb128<uint32_t>(iter) : 0;
-
-            if (memidx != 0) {
-                throw validation_error("unknown memory " +
-                                       std::to_string(memidx));
-            }
-
-            if (segment_flag & 1) {
-                // passive segment
-
-                uint32_t data_length = safe_read_leb128<uint32_t>(iter);
-                if (!iter.has_n_left(data_length)) {
-                    throw malformed_error(
-                        "unexpected end of section or function");
-                }
-                std::vector<uint8_t> data(data_length);
-                std::memcpy(data.data(), iter.get_with_at_least(data_length),
-                            data_length);
-                iter += data_length;
-
-                data_segments.emplace_back(Segment{memidx, std::move(data)});
-            } else {
-                // active segment
-                if (!memory) {
-                    throw validation_error("unknown memory 0");
-                }
-
-                // larger data type to account for potential addition overflow
-                uint64_t offset = interpret_const(iter, valtype::i32).u32;
-                uint64_t data_length = safe_read_leb128<uint32_t>(iter);
-                if (offset + data_length >
-                    memory->size() *
-                        static_cast<uint64_t>(WasmMemory::PAGE_SIZE)) {
-                    throw uninstantiable_error("out of bounds memory access");
-                }
-                if (!iter.has_n_left(data_length)) {
+            for (uint32_t i = 0; i < n_data; i++) {
+                if (iter.empty()) {
                     throw malformed_error(
                         "unexpected end of section or function");
                 }
 
-                std::vector<uint8_t> data(data_length);
-                std::memcpy(data.data(), iter.get_with_at_least(data_length),
-                            data_length);
-                iter += data_length;
+                uint32_t segment_flag = safe_read_leb128<uint32_t>(iter);
+                if (segment_flag & ~0b11) {
+                    throw validation_error("invalid data segment flag");
+                }
 
-                memory->copy_into(offset, data.data(), data_length);
+                uint32_t memidx =
+                    segment_flag & 0b10 ? safe_read_leb128<uint32_t>(iter) : 0;
 
-                data_segments.emplace_back(Segment{memidx, {}});
+                if (memidx != 0) {
+                    throw validation_error("unknown memory " +
+                                           std::to_string(memidx));
+                }
+
+                if (segment_flag & 1) {
+                    // passive segment
+
+                    uint32_t data_length = safe_read_leb128<uint32_t>(iter);
+                    if (!iter.has_n_left(data_length)) {
+                        throw malformed_error(
+                            "unexpected end of section or function");
+                    }
+                    std::vector<uint8_t> data(data_length);
+                    std::memcpy(data.data(),
+                                iter.get_with_at_least(data_length),
+                                data_length);
+                    iter += data_length;
+
+                    data_segments.emplace_back(
+                        Segment{memidx, std::move(data)});
+                } else {
+                    // active segment
+                    if (!memory) {
+                        throw validation_error("unknown memory 0");
+                    }
+
+                    // larger data type to account for potential addition
+                    // overflow
+                    uint64_t offset = interpret_const(iter, valtype::i32).u32;
+                    uint64_t data_length = safe_read_leb128<uint32_t>(iter);
+                    if (offset + data_length >
+                        memory->size() *
+                            static_cast<uint64_t>(WasmMemory::PAGE_SIZE)) {
+                        throw uninstantiable_error(
+                            "out of bounds memory access");
+                    }
+                    if (!iter.has_n_left(data_length)) {
+                        throw malformed_error(
+                            "unexpected end of section or function");
+                    }
+
+                    std::vector<uint8_t> data(data_length);
+                    std::memcpy(data.data(),
+                                iter.get_with_at_least(data_length),
+                                data_length);
+                    iter += data_length;
+
+                    memory->copy_into(offset, data.data(), data_length);
+
+                    data_segments.emplace_back(Segment{memidx, {}});
+                }
             }
-        }
-    });
+        },
+        [&] {
+            if (n_data != 0 && n_data != std::numeric_limits<uint32_t>::max()) {
+                throw malformed_error(
+                    "data count and data section have inconsistent lengths");
+            }
+        });
 
     skip_custom_section();
 
     if (!iter.empty()) {
-        throw malformed_error("malformed section id");
+        throw malformed_error("unexpected content after last section");
     }
 
     Validator(*this).validate(bytes.get() + length);
@@ -1056,7 +1077,11 @@ WasmValue Instance::interpret_const(safe_byte_iterator &iter,
             break;
         }
         default:
-            throw validation_error("constant expression required");
+            if (is_instruction(byte)) {
+                throw validation_error("constant expression required");
+            } else {
+                throw malformed_error("illegal opcode");
+            }
         }
     }
 

@@ -197,12 +197,12 @@ template <typename T, uint8_t BITS = sizeof(T) * 8, typename Iter>
 static inline T safe_read_leb128(Iter &iter) {
     Iter start = iter;
     uint64_t result = read_leb128(iter);
-    if (sizeof(T) != 8 && result > (1ULL << BITS) - 1) {
-        throw malformed_error("integer too large");
-    }
     if (static_cast<uint64_t>(iter - start) >
         static_cast<uint64_t>(1 + BITS / 7)) {
         throw malformed_error("integer representation too long");
+    }
+    if (sizeof(T) != 8 && result > (1ULL << BITS) - 1) {
+        throw malformed_error("integer too large");
     }
     if ((8 - std::countl_zero(static_cast<uint8_t>(iter[-1] & 0x7f)) +
          (iter - start - 1) * 7) > BITS) {
@@ -222,9 +222,9 @@ enum class Instruction {
 
     // insert exception proposal here
 
-    end  = 0x0b,
-    br   = 0x0c, br_if         = 0x0d, br_table = 0x0e,
-    call = 0x10, call_indirect = 0x11, return_  = 0x0f,
+    end      = 0x0b,
+    br       = 0x0c, br_if = 0x0d, br_table      = 0x0e,
+    return_  = 0x0f, call  = 0x10, call_indirect = 0x11,
 
     // insert return call here
 
@@ -563,8 +563,30 @@ static std::string multibyte_instructions[] = {
 #endif
 // clang-format on
 
-static inline bool is_instruction(uint8_t) {
-    // todo: figure out best way for this
-    return true;
+static inline bool is_instruction(uint8_t byte) {
+    using enum Instruction;
+    if (byte <= static_cast<uint8_t>(else_))
+        return true;
+    if (byte < static_cast<uint8_t>(end))
+        return false;
+    if (byte <= static_cast<uint8_t>(call_indirect))
+        return true;
+    if (byte < static_cast<uint8_t>(drop))
+        return false;
+    if (byte <= static_cast<uint8_t>(select_t))
+        return true;
+    if (byte < static_cast<uint8_t>(localget))
+        return false;
+    if (byte <= static_cast<uint8_t>(tableset))
+        return true;
+    if (byte < static_cast<uint8_t>(i32load))
+        return false;
+    if (byte <= static_cast<uint8_t>(i64extend32_s))
+        return true;
+    if (byte < static_cast<uint8_t>(ref_null))
+        return false;
+    if (byte <= static_cast<uint8_t>(ref_eq))
+        return true;
+    return byte == static_cast<uint8_t>(multibyte);
 }
 } // namespace mitey

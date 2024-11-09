@@ -393,14 +393,14 @@ void Validator::validate(safe_byte_iterator &iter, const Signature &signature,
         }
         case memorysize: {
             if (*iter++ != 0)
-                throw malformed_error("zero flag expected");
+                throw malformed_error("zero byte expected");
             ensure(instance.memory != nullptr, "unknown memory");
             apply({{}, {valtype::i32}});
             break;
         }
         case memorygrow: {
             if (*iter++ != 0)
-                throw malformed_error("zero flag expected");
+                throw malformed_error("zero byte expected");
             ensure(instance.memory != nullptr, "unknown memory");
             apply({{valtype::i32}, {valtype::i32}});
             break;
@@ -634,7 +634,7 @@ void Validator::validate(safe_byte_iterator &iter, const Signature &signature,
                     break;
                 case memory_init: {
                     uint32_t seg_idx = safe_read_leb128<uint32_t>(iter);
-                    if (*iter++ != 0) throw malformed_error("zero flag expected");
+                    if (*iter++ != 0) throw malformed_error("zero byte expected");
 
                     ensure(instance.memory != nullptr, "unknown memory 0");
                     ensure(seg_idx < instance.data_segments.size(), "unknown data segment");
@@ -648,15 +648,15 @@ void Validator::validate(safe_byte_iterator &iter, const Signature &signature,
                     break;
                 }
                 case memory_copy: {
-                    if (*iter++ != 0) throw malformed_error("zero flag expected");
-                    if (*iter++ != 0) throw malformed_error("zero flag expected");
+                    if (*iter++ != 0) throw malformed_error("zero byte expected");
+                    if (*iter++ != 0) throw malformed_error("zero byte expected");
                     ensure(instance.memory != nullptr, "unknown memory 0");
 
                     apply({{valtype::i32, valtype::i32, valtype::i32}, {}});
                     break;
                 }
                 case memory_fill: {
-                    if (*iter++ != 0) throw malformed_error("zero flag expected");
+                    if (*iter++ != 0) throw malformed_error("zero byte expected");
                     ensure(instance.memory != nullptr, "unknown memory 0");
 
                     apply({{valtype::i32, valtype::i32, valtype::i32}, {}});
