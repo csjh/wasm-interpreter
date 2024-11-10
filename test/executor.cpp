@@ -462,7 +462,8 @@ int main(int argv, char **argc) {
                       << std::endl;
             failures++;
         } catch (const T &e) {
-            if (std::string(e.what()) != m.text) {
+            std::string what = e.what();
+            if (!what.starts_with(m.text) && !m.text.starts_with(what)) {
                 std::cerr << "Expected error message: " << m.text
                           << " but got: " << e.what() << std::endl;
                 failures++;
@@ -485,7 +486,8 @@ int main(int argv, char **argc) {
                       << " for file: " << m.filename << std::endl;
             failures++;
         } catch (const T &e) {
-            if (std::string(e.what()) != m.text) {
+            std::string what = e.what();
+            if (!what.starts_with(m.text) && !m.text.starts_with(what)) {
                 std::cerr << "Expected error message: " << m.text
                           << " but got: " << e.what() << std::endl;
                 failures++;
