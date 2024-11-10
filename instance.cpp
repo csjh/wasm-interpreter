@@ -1,6 +1,6 @@
-#include "interpreter.hpp"
+#include "instance.hpp"
 #include "spec.hpp"
-#include "validator.hpp"
+#include "module.hpp"
 #include <algorithm>
 #include <cmath>
 #include <functional>

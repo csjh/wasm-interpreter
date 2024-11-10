@@ -1,4 +1,4 @@
-#include "interpreter.hpp"
+#include "instance.hpp"
 
 namespace mitey {
 class Validator {

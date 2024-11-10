@@ -1,5 +1,5 @@
-#include "../interpreter.hpp"
-#include "../validator.hpp"
+#include "../instance.hpp"
+#include "../module.hpp"
 #include "json.hpp"
 #include <filesystem>
 #include <fstream>
