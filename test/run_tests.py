@@ -1,4 +1,6 @@
 import os
+import subprocess
+import sys
 
 IGNORE_LIST = [
     # takes a very long time to run
@@ -27,11 +29,12 @@ for file in os.listdir("core"):
             continue
 
         print(f"Testing {file}")
-        if os.system(f"./executor {output_path}") != 0:
-            print(f"Failed: {file}\n")
-            failed += 1
-        else:
-            print(f"Passed: {file}\n")
-            passed += 1
+        result = subprocess.run(["./executor", output_path], capture_output=True)
+        print(result.stdout.decode("utf-8"))
+        print(result.stderr.decode("utf-8"), file=sys.stderr)
+
+        p, f = result.stdout.decode("utf-8").split('\n')[-3:-1]
+        passed += int(p[len("Passes: "):])
+        failed += int(f[len("Failures: "):])
 
 print(f"Passed: {passed}, Failed: {failed}")

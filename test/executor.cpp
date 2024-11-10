@@ -452,6 +452,54 @@ int main(int argv, char **argc) {
         }
     };
 
+    uint32_t passes = 0, failures = 0;
+
+    auto runtime_error = [&]<typename T>(const auto &m) {
+        try {
+            execute_action(m.action);
+
+            std::cerr << "Expected " << typeid(T).name() << " for test"
+                      << std::endl;
+            failures++;
+        } catch (const T &e) {
+            if (std::string(e.what()) != m.text) {
+                std::cerr << "Expected error message: " << m.text
+                          << " but got: " << e.what() << std::endl;
+                failures++;
+            } else {
+                passes++;
+            }
+        } catch (std::runtime_error &e) {
+            std::cerr << "Expected " << typeid(T).name()
+                      << " with message: " << m.text << " but got: " << e.what()
+                      << std::endl;
+            failures++;
+        }
+    };
+
+    auto compile_error = [&]<typename T>(const auto &m) {
+        try {
+            from_file(resolve_relative(filename, m.filename), imports);
+
+            std::cerr << "Expected " << typeid(T).name()
+                      << " for file: " << m.filename << std::endl;
+            failures++;
+        } catch (const T &e) {
+            if (std::string(e.what()) != m.text) {
+                std::cerr << "Expected error message: " << m.text
+                          << " but got: " << e.what() << std::endl;
+                failures++;
+            } else {
+                passes++;
+            }
+        } catch (std::runtime_error &e) {
+            std::cerr << "Expected " << typeid(T).name()
+                      << " with message: " << m.text << " but got: " << e.what()
+                      << std::endl;
+            failures++;
+        }
+    };
+
     // force all created instances to stick around
     // for export usage
     std::vector<std::shared_ptr<mitey::Instance>> keepalive;
@@ -467,27 +515,7 @@ int main(int argv, char **argc) {
             instances[m.name] = instance;
             instances["default"] = instance;
             keepalive.push_back(instance);
-        } else if (std::holds_alternative<test_malformed>(t)) {
-            auto &m = std::get<test_malformed>(t);
-            if (m.filename.ends_with(".wat"))
-                continue;
-            try {
-                from_file(resolve_relative(filename, m.filename), imports);
-
-                std::cerr << "Expected malformed error for file: " << m.filename
-                          << std::endl;
-                return 1;
-            } catch (mitey::malformed_error &e) {
-                if (std::string(e.what()) != m.text) {
-                    std::cerr << "Expected error message: " << m.text
-                              << " but got: " << e.what() << std::endl;
-                    return 1;
-                }
-            } catch (std::runtime_error &e) {
-                std::cerr << "Expected malformed error with message: " << m.text
-                          << " but got: " << e.what() << std::endl;
-                return 1;
-            }
+            passes++;
         } else if (std::holds_alternative<test_return>(t)) {
             auto &m = std::get<test_return>(t);
 
@@ -496,7 +524,8 @@ int main(int argv, char **argc) {
             if (result.size() != m.expected.size()) {
                 std::cerr << "Expected " << m.expected.size()
                           << " results but got " << result.size() << std::endl;
-                return 1;
+                failures++;
+                continue;
             }
 
             auto expected_results = to_wasm_values(m.expected);
@@ -531,107 +560,43 @@ int main(int argv, char **argc) {
                 return true;
             };
 
+            bool failed = false;
             for (uint32_t i = 0; i < result.size(); ++i) {
                 if (!test(m.expected[i].type, result[i], expected_results[i])) {
-                    return 1;
+                    failed = true;
+                    break;
                 }
             }
-        } else if (std::holds_alternative<test_invalid>(t)) {
-            auto &m = std::get<test_invalid>(t);
-            try {
-                from_file(resolve_relative(filename, m.filename), imports);
-
-                std::cerr << "Expected validation error for file: "
-                          << m.filename << std::endl;
-                return 1;
-            } catch (mitey::validation_error &e) {
-                if (std::string(e.what()) != m.text) {
-                    std::cerr << "Expected error message: " << m.text
-                              << " but got: " << e.what() << std::endl;
-                    return 1;
-                }
-            } catch (std::runtime_error &e) {
-                std::cerr << "Expected validation error with message: "
-                          << m.text << " but got: " << e.what() << std::endl;
-                return 1;
-            }
-        } else if (std::holds_alternative<test_trap>(t)) {
-            auto &m = std::get<test_trap>(t);
-            try {
-                execute_action(m.action);
-                std::cerr << "Expected trap for test" << std::endl;
-                return 1;
-            } catch (mitey::trap_error &e) {
-                if (std::string(e.what()) != m.text) {
-                    std::cerr << "Expected trap: " << m.text
-                              << " but got: " << e.what() << std::endl;
-                    return 1;
-                }
-            } catch (std::runtime_error &e) {
-                std::cerr << "Expected trap for action: " << m.text
-                          << " but got: " << e.what() << std::endl;
-                return 1;
-            }
-        } else if (std::holds_alternative<test_exhaustion>(t)) {
-            auto &m = std::get<test_exhaustion>(t);
-            try {
-                execute_action(m.action);
-
-                std::cerr << "Expected exhaustion for test" << std::endl;
-                return 1;
-            } catch (mitey::trap_error &e) {
-                if (std::string(e.what()) != m.text) {
-                    std::cerr << "Expected message: " << m.text
-                              << " but got: " << e.what() << std::endl;
-                    return 1;
-                }
-            } catch (std::runtime_error &e) {
-                std::cerr << "Expected exhaustion error: " << m.text
-                          << " but got: " << e.what() << std::endl;
-                return 1;
+            if (failed) {
+                failures++;
+            } else {
+                passes++;
             }
         } else if (std::holds_alternative<test_action>(t)) {
             auto &m = std::get<test_action>(t);
             assert(m.expected.size() == 0);
             execute_action(m.action);
+            passes++;
+        } else if (std::holds_alternative<test_malformed>(t)) {
+            auto &m = std::get<test_malformed>(t);
+            if (m.module_type != "binary")
+                continue;
+            compile_error.template operator()<mitey::malformed_error>(m);
+        } else if (std::holds_alternative<test_invalid>(t)) {
+            auto &m = std::get<test_invalid>(t);
+            compile_error.template operator()<mitey::validation_error>(m);
         } else if (std::holds_alternative<test_unlinkable>(t)) {
             auto &m = std::get<test_unlinkable>(t);
-            try {
-                from_file(resolve_relative(filename, m.filename), imports);
-
-                std::cerr << "Expected link error for file: " << m.filename
-                          << std::endl;
-                return 1;
-            } catch (mitey::link_error &e) {
-                if (std::string(e.what()) != m.text) {
-                    std::cerr << "Expected error message: " << m.text
-                              << " but got: " << e.what() << std::endl;
-                    return 1;
-                }
-            } catch (std::runtime_error &e) {
-                std::cerr << "Expected link error with message: " << m.text
-                          << " but got: " << e.what() << std::endl;
-                return 1;
-            }
+            compile_error.template operator()<mitey::link_error>(m);
         } else if (std::holds_alternative<test_uninstantiable>(t)) {
             auto &m = std::get<test_uninstantiable>(t);
-            try {
-                from_file(resolve_relative(filename, m.filename), imports);
-
-                std::cerr << "Expected uninstantiable error for file: "
-                          << m.filename << std::endl;
-                return 1;
-            } catch (mitey::uninstantiable_error &e) {
-                if (std::string(e.what()) != m.text) {
-                    std::cerr << "Expected error message: " << m.text
-                              << " but got: " << e.what() << std::endl;
-                    return 1;
-                }
-            } catch (std::runtime_error &e) {
-                std::cerr << "Expected uninstantiable error with message: "
-                          << m.text << " but got: " << e.what() << std::endl;
-                return 1;
-            }
+            compile_error.template operator()<mitey::uninstantiable_error>(m);
+        } else if (std::holds_alternative<test_trap>(t)) {
+            auto &m = std::get<test_trap>(t);
+            runtime_error.template operator()<mitey::trap_error>(m);
+        } else if (std::holds_alternative<test_exhaustion>(t)) {
+            auto &m = std::get<test_exhaustion>(t);
+            runtime_error.template operator()<mitey::trap_error>(m);
         } else if (std::holds_alternative<test_register>(t)) {
             auto &m = std::get<test_register>(t);
             keepalive.push_back(instances[m.name]);
@@ -640,6 +605,9 @@ int main(int argv, char **argc) {
             std::cerr << "Unhandled std::variant type" << std::endl;
         }
     }
+
+    std::cout << "Passes: " << passes << std::endl;
+    std::cout << "Failures: " << failures << std::endl;
 
     return 0;
 }
