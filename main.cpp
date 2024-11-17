@@ -1,4 +1,4 @@
-#include "interpreter.hpp"
+#include "module.hpp"
 #include <memory>
 
 void free_u8(uint8_t *ptr) { free(ptr); }
