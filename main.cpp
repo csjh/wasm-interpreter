@@ -1,8 +1,6 @@
 #include "module.hpp"
 #include <memory>
 
-void free_u8(uint8_t *ptr) { free(ptr); }
-
 int main(int argv, char **argc) {
     if (argv < 2) {
         printf("Usage: %s <filename>\n", argc[0]);
@@ -21,10 +19,10 @@ int main(int argv, char **argc) {
     long length = ftell(file);
     fseek(file, 0, SEEK_SET);
 
-    uint8_t *bytes = (uint8_t *)malloc(length);
-    fread(bytes, 1, length, file);
+    auto bytes = std::make_unique<uint8_t[]>(length);
+    fread(bytes.get(), 1, length, file);
     fclose(file);
 
-    mitey::Instance instance(
-        std::unique_ptr<uint8_t, void (*)(uint8_t *)>(bytes, free_u8), length);
+    auto module = mitey::Module::compile(std::move(bytes), length);
+    auto instance = module->instantiate();
 }

@@ -50,6 +50,10 @@ enum class valtype : uint8_t {
     externref = 0x6f,
 };
 
+[[noreturn]] static inline void trap(std::string message) {
+    throw trap_error(message);
+}
+
 static inline bool is_reftype(uint32_t byte) {
     return byte == static_cast<uint8_t>(valtype::funcref) ||
            byte == static_cast<uint8_t>(valtype::externref);
@@ -81,7 +85,23 @@ static inline bool is_valtype(valtype type) {
 struct Signature {
     std::vector<valtype> params;
     std::vector<valtype> results;
-    uint32_t typeidx = -1;
+
+    template <typename Types, typename Iter>
+    static Signature read_blocktype(Types &types, Iter &iter) {
+        uint8_t byte = *iter;
+        if (byte == static_cast<uint8_t>(valtype::empty)) {
+            ++iter;
+            return {{}, {}};
+        } else if (is_valtype(byte)) {
+            ++iter;
+            return {{}, {static_cast<valtype>(byte)}};
+        } else {
+            int64_t n = safe_read_sleb128<int64_t, 33>(iter);
+            assert(n >= 0);
+            assert(static_cast<uint64_t>(n) < types.size());
+            return types[n];
+        }
+    }
 };
 
 enum class mut {

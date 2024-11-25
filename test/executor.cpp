@@ -346,13 +346,13 @@ std::shared_ptr<mitey::Instance> from_file(const std::string &filename,
     wasm_file.seekg(0, std::ios::beg);
 
     // load data into a unique_ptr
-    std::unique_ptr<uint8_t, void (*)(uint8_t *)> bytes(
-        new uint8_t[length], [](uint8_t *ptr) { delete[] ptr; });
+    auto bytes = std::make_unique<uint8_t[]>(length);
 
     wasm_file.read(reinterpret_cast<char *>(bytes.get()), length);
     wasm_file.close();
 
-    return std::make_shared<mitey::Instance>(std::move(bytes), length, imports);
+    auto module = mitey::Module::compile(std::move(bytes), length);
+    return module->instantiate(imports);
 }
 
 namespace fs = std::filesystem;
@@ -389,49 +389,49 @@ int main(int argv, char **argc) {
         {"table",
          std::make_shared<mitey::WasmTable>(mitey::valtype::funcref, 10, 20)},
         {"memory", std::make_shared<mitey::WasmMemory>(1, 2)},
-        {"print", mitey::FunctionInfo(
-                      [&](mitey::WasmValue *) {
-                          std::cout << "spectest print" << std::endl;
-                      },
-                      {{}, {}})},
-        {"print_i32", mitey::FunctionInfo(
-                          [&](mitey::WasmValue *args) {
-                              std::cout << "spectest print_i32: " << args[0].i32
-                                        << std::endl;
-                          },
-                          {{mitey::valtype::i32}, {}})},
-        {"print_i64", mitey::FunctionInfo(
-                          [&](mitey::WasmValue *args) {
-                              std::cout << "spectest print_i64: " << args[0].i64
-                                        << std::endl;
-                          },
-                          {{mitey::valtype::i64}, {}})},
-        {"print_f32", mitey::FunctionInfo(
-                          [&](mitey::WasmValue *args) {
-                              std::cout << "spectest print_f32: " << args[0].f32
-                                        << std::endl;
-                          },
-                          {{mitey::valtype::f32}, {}})},
-        {"print_f64", mitey::FunctionInfo(
-                          [&](mitey::WasmValue *args) {
-                              std::cout << "spectest print_f64: " << args[0].f64
-                                        << std::endl;
-                          },
-                          {{mitey::valtype::f64}, {}})},
+        {"print", mitey::FunctionInfo({{}, {}},
+                                      [&](mitey::WasmValue *) {
+                                          std::cout << "spectest print"
+                                                    << std::endl;
+                                      })},
+        {"print_i32", mitey::FunctionInfo({{mitey::valtype::i32}, {}},
+                                          [&](mitey::WasmValue *args) {
+                                              std::cout
+                                                  << "spectest print_i32: "
+                                                  << args[0].i32 << std::endl;
+                                          })},
+        {"print_i64", mitey::FunctionInfo({{mitey::valtype::i64}, {}},
+                                          [&](mitey::WasmValue *args) {
+                                              std::cout
+                                                  << "spectest print_i64: "
+                                                  << args[0].i64 << std::endl;
+                                          })},
+        {"print_f32", mitey::FunctionInfo({{mitey::valtype::f32}, {}},
+                                          [&](mitey::WasmValue *args) {
+                                              std::cout
+                                                  << "spectest print_f32: "
+                                                  << args[0].f32 << std::endl;
+                                          })},
+        {"print_f64", mitey::FunctionInfo({{mitey::valtype::f64}, {}},
+                                          [&](mitey::WasmValue *args) {
+                                              std::cout
+                                                  << "spectest print_f64: "
+                                                  << args[0].f64 << std::endl;
+                                          })},
         {"print_i32_f32",
-         mitey::FunctionInfo(
-             [&](mitey::WasmValue *args) {
-                 std::cout << "spectest print_i32_f32: " << args[0].i32 << " "
-                           << args[1].f32 << std::endl;
-             },
-             {{mitey::valtype::i32, mitey::valtype::f32}, {}})},
+         mitey::FunctionInfo({{mitey::valtype::i32, mitey::valtype::f32}, {}},
+                             [&](mitey::WasmValue *args) {
+                                 std::cout << "spectest print_i32_f32: "
+                                           << args[0].i32 << " " << args[1].f32
+                                           << std::endl;
+                             })},
         {"print_f64_f64",
-         mitey::FunctionInfo(
-             [&](mitey::WasmValue *args) {
-                 std::cout << "spectest print_f64_f64: " << args[0].f64 << " "
-                           << args[1].f64 << std::endl;
-             },
-             {{mitey::valtype::f64, mitey::valtype::f64}, {}})}};
+         mitey::FunctionInfo({{mitey::valtype::f64, mitey::valtype::f64}, {}},
+                             [&](mitey::WasmValue *args) {
+                                 std::cout << "spectest print_f64_f64: "
+                                           << args[0].f64 << " " << args[1].f64
+                                           << std::endl;
+                             })}};
 
     mitey::Imports imports{{"spectest", spectest}};
 

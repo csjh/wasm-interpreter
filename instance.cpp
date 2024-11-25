@@ -1,6 +1,6 @@
 #include "instance.hpp"
-#include "spec.hpp"
 #include "module.hpp"
+#include "spec.hpp"
 #include <algorithm>
 #include <cmath>
 #include <functional>
@@ -12,909 +12,375 @@
 #endif
 
 namespace mitey {
-safe_byte_iterator::safe_byte_iterator(uint8_t *begin, uint8_t *end)
-    : iter(begin), end(end) {}
 
-uint8_t safe_byte_iterator::operator*() const {
-    if (iter == end) {
-        throw malformed_error("unexpected end");
-    }
-    return *iter;
-}
-
-uint8_t safe_byte_iterator::operator[](ssize_t n) const {
-    if (iter + n >= end) {
-        throw malformed_error("unexpected end");
-    }
-    return iter[n];
-}
-
-safe_byte_iterator &safe_byte_iterator::operator++() {
-    if (iter == end) {
-        throw malformed_error("unexpected end");
-    }
-    ++iter;
-    return *this;
-}
-
-safe_byte_iterator safe_byte_iterator::operator++(int) {
-    if (iter == end) {
-        throw malformed_error("unexpected end");
-    }
-    return safe_byte_iterator(iter++, end);
-}
-
-safe_byte_iterator safe_byte_iterator::operator+(size_t n) const {
-    if (iter + n > end) {
-        throw malformed_error("length out of bounds");
-    }
-    return safe_byte_iterator(iter + n, end);
-}
-
-safe_byte_iterator &safe_byte_iterator::operator+=(size_t n) {
-    if (iter + n > end) {
-        throw malformed_error("unexpected end");
-    }
-    iter += n;
-    return *this;
-}
-
-ptrdiff_t safe_byte_iterator::operator-(safe_byte_iterator other) const {
-    return iter - other.iter;
-}
-
-ptrdiff_t safe_byte_iterator::operator-(const uint8_t *other) const {
-    return iter - other;
-}
-
-bool safe_byte_iterator::operator<(safe_byte_iterator other) const {
-    return iter < other.iter;
-}
-
-uint8_t *safe_byte_iterator::get_with_at_least(size_t n) const {
-    if (!has_n_left(n)) {
-        throw malformed_error("length out of bounds");
-    }
-    return iter;
-}
-
-bool safe_byte_iterator::empty() const { return iter == end; }
-
-bool safe_byte_iterator::has_n_left(size_t n) const { return iter + n <= end; }
-
-struct SignatureHasher {
-    size_t operator()(const Signature &sig) const {
-        size_t hash = 0;
-        for (valtype param : sig.params) {
-            hash ^= std::hash<uint8_t>{}(static_cast<uint8_t>(param));
-        }
-        for (valtype result : sig.results) {
-            hash ^= std::hash<uint8_t>{}(static_cast<uint8_t>(result));
-        }
-        return hash;
-    }
-};
-
-struct SignatureEquality {
-    bool operator()(const Signature &lhs, const Signature &rhs) const {
-        return lhs.params == rhs.params && lhs.results == rhs.results;
-    }
-};
-
-std::tuple<uint32_t, uint32_t> get_limits(safe_byte_iterator &iter,
-                                          uint32_t upper_limit) {
-    uint32_t flags = safe_read_leb128<uint32_t, 1>(iter);
-    if (flags != 0 && flags != 1) {
-        throw malformed_error("integer too large");
-    }
-    uint32_t initial = safe_read_leb128<uint32_t>(iter);
-    uint32_t max = flags == 1 ? safe_read_leb128<uint32_t>(iter) : upper_limit;
-    return {initial, max};
-}
-
-std::tuple<uint32_t, uint32_t> get_memory_limits(safe_byte_iterator &iter) {
-    auto [initial, max] = get_limits(iter, WasmMemory::MAX_PAGES);
-    if (initial > WasmMemory::MAX_PAGES || max > WasmMemory::MAX_PAGES) {
-        throw validation_error(
-            "memory size must be at most 65536 pages (4GiB)");
-    }
-    if (max < initial) {
-        throw validation_error("size minimum must not be greater than maximum");
-    }
-    return {initial, max};
-}
-
-std::tuple<uint32_t, uint32_t> get_table_limits(safe_byte_iterator &iter) {
-    auto [initial, max] =
-        get_limits(iter, std::numeric_limits<uint32_t>::max());
-    if (max < initial) {
-        throw validation_error("size minimum must not be greater than maximum");
-    }
-    return {initial, max};
-}
-
-Instance::Instance(std::unique_ptr<uint8_t, void (*)(uint8_t *)> _bytes,
-                   uint32_t length, const Imports &imports)
-    : bytes(std::move(_bytes)),
-      initial_stack(static_cast<WasmValue *>(malloc(STACK_SIZE)), STACK_SIZE),
+Instance::Instance(std::shared_ptr<Module> module)
+    : module(module), memory(nullptr),
+      initial_stack(static_cast<WasmValue *>(malloc(STACK_SIZE)),
+                    STACK_SIZE / sizeof(WasmValue)),
       frames(static_cast<StackFrame *>(malloc(sizeof(StackFrame) * MAX_DEPTH)),
              MAX_DEPTH),
       control_stack(
           static_cast<BrTarget *>(malloc(sizeof(BrTarget) * MAX_DEPTH)),
-          MAX_DEPTH) {
+          MAX_DEPTH),
+      functions(module->functions.size()), types(module->types.size()),
+      if_jumps(module->if_jumps), block_ends(module->block_ends),
+      globals(module->globals.size()), elements(module->elements.size()),
+      data_segments(module->data_segments.size()),
+      tables(module->tables.size()) {}
 
-    if (length < 4) {
-        throw malformed_error("unexpected end");
-    }
-
-    safe_byte_iterator iter(bytes.get(), bytes.get() + length);
-
-    if (std::memcmp(reinterpret_cast<char *>(iter.get_with_at_least(4)),
-                    "\0asm", 4) != 0) {
-        throw malformed_error("magic header not detected");
-    }
-    iter += 4;
-
-    if (length < 8) {
-        throw malformed_error("unexpected end");
-    }
-
-    if (*reinterpret_cast<uint32_t *>(iter.get_with_at_least(4)) != 1) {
-        throw malformed_error("unknown binary version");
-    }
-    iter += sizeof(uint32_t);
-
-    auto skip_custom_section = [&]() {
-        while (!iter.empty() && *iter == 0) [[unlikely]] {
-            ++iter;
-            uint32_t section_length = safe_read_leb128<uint32_t>(iter);
-            safe_byte_iterator start = iter;
-
-            uint32_t name_length = safe_read_leb128<uint32_t>(iter);
-            if (!is_valid_utf8(iter.get_with_at_least(name_length),
-                               (iter + name_length).unsafe_ptr())) {
-                throw malformed_error("malformed UTF-8 encoding");
-            }
-
-            if (start + section_length < iter) {
-                throw malformed_error("unexpected end");
-            }
-
-            iter = start + section_length;
+void Instance::initialize(const Imports &imports) {
+    auto get_import = [&](const ImportSpecifier &specifier) -> ExportValue {
+        auto [module_name, field_name] = specifier;
+        if (!imports.contains(module_name)) {
+            throw link_error("unknown import");
         }
+        auto &import_module = imports.at(module_name);
+        if (!import_module.contains(field_name)) {
+            throw link_error("unknown import");
+        }
+        auto &import = import_module.at(field_name);
+        if (static_cast<mitey::ImExDesc>(import.index()) !=
+            module->imports.at(module_name).at(field_name)) {
+            throw link_error("incompatible import type");
+        }
+        return import;
     };
 
-    auto section = [&](
-                       uint32_t id, std::function<void()> body,
-                       std::function<void()> else_ = [] {}) {
-        if (!iter.empty() && *iter == id) {
-            ++iter;
-            uint32_t section_length = safe_read_leb128<uint32_t>(iter);
-            if (!iter.has_n_left(section_length)) {
-                throw malformed_error("length out of bounds");
-            }
-            safe_byte_iterator section_start = iter;
+    if (module->memory.exists) {
+        if (module->memory.import) {
+            auto imported_memory = std::get<std::shared_ptr<WasmMemory>>(
+                get_import(*module->memory.import));
 
-            body();
-
-            if (iter - section_start != section_length) {
-                throw malformed_error("section size mismatch");
-            }
-
-            // todo: remove this when validation separates
-            if (!iter.empty() && *iter == id) {
-                throw malformed_error("unexpected content after last section");
-            }
-        } else if (!iter.empty() && *iter > 12) {
-            throw malformed_error("malformed section id");
-        } else {
-            else_();
-        }
-    };
-
-    skip_custom_section();
-
-    // type section
-    section(1, [&] {
-        std::unordered_map<Signature, uint32_t, SignatureHasher,
-                           SignatureEquality>
-            deduplicator;
-
-        uint32_t n_types = safe_read_leb128<uint32_t>(iter);
-
-        types.reserve(n_types);
-
-        for (uint32_t i = 0; i < n_types; ++i) {
-            if (iter.empty()) {
-                throw malformed_error("unexpected end of section or function");
-            }
-
-            if (*iter != 0x60) {
-                throw malformed_error("integer representation too long");
-                // throw validation_error("invalid function type");
-            }
-            ++iter;
-
-            Signature fn{{}, {}, i};
-
-            uint32_t n_params = safe_read_leb128<uint32_t>(iter);
-            fn.params.reserve(n_params);
-            for (uint32_t j = 0; j < n_params; ++j) {
-                if (!is_valtype(iter[j])) {
-                    throw validation_error("invalid parameter type");
-                }
-                fn.params.push_back(static_cast<valtype>(iter[j]));
-            }
-            iter += n_params;
-
-            uint32_t n_results = safe_read_leb128<uint32_t>(iter);
-            fn.results.reserve(n_results);
-            for (uint32_t j = 0; j < n_results; ++j) {
-                if (!is_valtype(iter[j])) {
-                    throw validation_error("invalid result type");
-                }
-                fn.results.push_back(static_cast<valtype>(iter[j]));
-            }
-            iter += n_results;
-
-            if (deduplicator.contains(fn)) {
-                fn.typeidx = deduplicator[fn];
-            } else {
-                deduplicator[fn] = fn.typeidx;
-            }
-
-            types.emplace_back(fn);
-        }
-    });
-
-    skip_custom_section();
-
-    uint32_t n_fn_imports = 0;
-
-    // import section
-    section(2, [&] {
-        uint32_t n_imports = safe_read_leb128<uint32_t>(iter);
-
-        for (uint32_t i = 0; i < n_imports; i++) {
-            if (iter.empty()) {
-                throw malformed_error("unexpected end of section or function");
-            }
-
-            uint32_t module_len = safe_read_leb128<uint32_t>(iter);
-            if (!is_valid_utf8(iter.get_with_at_least(module_len),
-                               (iter + module_len).unsafe_ptr())) {
-                throw malformed_error("malformed UTF-8 encoding");
-            }
-            std::string module(
-                reinterpret_cast<char *>(iter.get_with_at_least(module_len)),
-                module_len);
-            iter += module_len;
-
-            uint32_t field_len = safe_read_leb128<uint32_t>(iter);
-            if (!is_valid_utf8(iter.get_with_at_least(field_len),
-                               (iter + field_len).unsafe_ptr())) {
-                throw malformed_error("malformed UTF-8 encoding");
-            }
-            std::string field(
-                reinterpret_cast<char *>(iter.get_with_at_least(field_len)),
-                field_len);
-            iter += field_len;
-
-            if (!imports.contains(module)) {
-                throw link_error("unknown import");
-            }
-            const auto &module_imports = imports.at(module);
-            if (!module_imports.contains(field)) {
-                throw link_error("unknown import");
-            }
-            const auto &import = module_imports.at(field);
-
-            uint32_t kind = safe_read_leb128<uint32_t>(iter);
-            if (kind != import.index()) {
+            if (imported_memory->size() < module->memory.min ||
+                imported_memory->max() > module->memory.max) {
                 throw link_error("incompatible import type");
             }
-            if (std::holds_alternative<FunctionInfo>(import)) {
-                // func
-                uint32_t typeidx = safe_read_leb128<uint32_t>(iter);
-                if (typeidx >= types.size()) {
-                    throw validation_error("unknown type");
-                }
 
-                auto fn = std::get<FunctionInfo>(import);
-                if (!SignatureEquality().operator()(types[typeidx], fn.type)) {
-                    throw link_error("incompatible import type");
-                }
-                fn.type = types[typeidx];
-
-                functions.push_back(fn);
-                n_fn_imports++;
-            } else if (std::holds_alternative<std::shared_ptr<WasmTable>>(
-                           import)) {
-                // table
-                uint32_t reftype = safe_read_leb128<uint32_t>(iter);
-                if (!is_reftype(reftype)) {
-                    throw malformed_error("malformed reference type");
-                }
-
-                auto table = std::get<std::shared_ptr<WasmTable>>(import);
-                auto [initial, max] = get_table_limits(iter);
-                if (table->size() < initial || table->max() > max ||
-                    table->type != static_cast<valtype>(reftype)) {
-                    throw link_error("incompatible import type");
-                }
-                tables.push_back(table);
-            } else if (std::holds_alternative<std::shared_ptr<WasmMemory>>(
-                           import)) {
-                // mem
-                if (memory) {
-                    throw validation_error("multiple memories");
-                }
-
-                auto [initial, max] = get_memory_limits(iter);
-                auto memory = std::get<std::shared_ptr<WasmMemory>>(import);
-                if (memory->size() < initial) {
-                    throw link_error("incompatible import type");
-                }
-                if (memory->max() > max) {
-                    throw link_error("incompatible import type");
-                }
-                this->memory = memory;
-            } else if (std::holds_alternative<std::shared_ptr<WasmGlobal>>(
-                           import)) {
-                // global
-                uint32_t valtype = safe_read_leb128<uint32_t>(iter);
-                if (!is_valtype(valtype)) {
-                    throw malformed_error("invalid global type");
-                }
-                uint8_t mut = *iter++;
-                if (!is_mut(mut)) {
-                    throw malformed_error("malformed mutability");
-                }
-
-                auto global = std::get<std::shared_ptr<WasmGlobal>>(import);
-                if (global->_mut != static_cast<enum mut>(mut) ||
-                    global->type != static_cast<enum valtype>(valtype)) {
-                    throw link_error("incompatible import type");
-                }
-
-                globals.push_back(global);
-            }
+            memory = imported_memory;
+        } else {
+            memory = std::make_shared<WasmMemory>(module->memory.min,
+                                                  module->memory.max);
         }
-    });
-
-    skip_custom_section();
-
-    // function type section
-    section(3, [&] {
-        uint32_t n_functions = safe_read_leb128<uint32_t>(iter);
-
-        functions.reserve(n_functions);
-
-        for (uint32_t i = 0; i < n_functions; ++i) {
-            if (iter.empty()) {
-                throw malformed_error("unexpected end of section or function");
-            }
-
-            uint32_t type_idx = safe_read_leb128<uint32_t>(iter);
-            if (type_idx >= types.size()) {
-                throw validation_error("unknown type");
-            }
-            functions.emplace_back(FunctionInfo{nullptr, types[type_idx], {}});
-        }
-    });
+    }
 
     for (uint32_t i = 0; i < functions.size(); i++) {
-        funcrefs.push_back(
-            IndirectFunction{nullptr, i, functions[i].type.typeidx});
+        const auto &fn = module->functions[i];
+        if (fn.import) {
+            auto imported_function =
+                std::get<FunctionInfo>(get_import(*fn.import));
+
+            if (imported_function.type !=
+                RuntimeType::from_signature(fn.type)) {
+                throw link_error("incompatible import type");
+            }
+
+            functions[i] = imported_function;
+        } else {
+            functions[i] =
+                FunctionInfo(fn.type, self.lock(), fn.start, fn.locals);
+        }
     }
 
-    skip_custom_section();
+    for (uint32_t i = 0; i < types.size(); i++) {
+        types[i] = RuntimeType::from_signature(module->types[i]);
+    }
 
-    // table section
-    section(4, [&] {
-        uint32_t n_tables = safe_read_leb128<uint32_t>(iter);
-        tables.reserve(n_tables);
+    for (uint32_t i = 0; i < globals.size(); i++) {
+        const auto &global = module->globals[i];
+        if (global.import) {
+            auto imported_global = std::get<std::shared_ptr<WasmGlobal>>(
+                get_import(*global.import));
 
-        for (uint32_t i = 0; i < n_tables; ++i) {
-            if (iter.empty()) {
-                throw malformed_error("unexpected end of section or function");
+            if (imported_global->type != global.type ||
+                imported_global->_mut != global.mutability) {
+                throw link_error("incompatible import type");
             }
 
-            uint8_t elem_type = *iter++;
-            if (!is_reftype(elem_type)) {
-                throw validation_error("invalid table element type");
-            }
-
-            auto [initial, max] = get_table_limits(iter);
-            tables.emplace_back(std::make_shared<WasmTable>(
-                static_cast<valtype>(elem_type), initial, max));
+            globals[i] = imported_global;
+        } else {
+            globals[i] = std::make_shared<WasmGlobal>(
+                global.type, global.mutability,
+                interpret_const_inplace(global.initializer));
         }
-    });
+    }
 
-    skip_custom_section();
+    for (uint32_t i = 0; i < tables.size(); i++) {
+        const auto &table = module->tables[i];
+        if (table.import) {
+            auto imported_table =
+                std::get<std::shared_ptr<WasmTable>>(get_import(*table.import));
 
-    // memory section
-    section(5, [&] {
-        uint32_t n_memories = safe_read_leb128<uint32_t>(iter);
-        if (n_memories > 1) {
-            throw validation_error("multiple memories");
-        } else if (n_memories == 1) {
-            if (iter.empty()) {
-                throw malformed_error("unexpected end of section or function");
-            }
-            if (memory) {
-                throw validation_error("multiple memories");
+            if (imported_table->size() < table.min ||
+                imported_table->max() > table.max ||
+                imported_table->type != table.type) {
+                throw link_error("incompatible import type");
             }
 
-            auto [initial, max] = get_memory_limits(iter);
-            memory = std::make_shared<WasmMemory>(initial, max);
+            tables[i] = imported_table;
+        } else {
+            tables[i] =
+                std::make_shared<WasmTable>(table.type, table.min, table.max);
         }
-    });
+    }
 
-    skip_custom_section();
+    uint8_t *iter = module->element_start;
+    for (uint32_t i = 0; i < elements.size(); i++) {
+        uint32_t flags = read_leb128(iter);
 
-    // global section
-    section(6, [&] {
-        uint32_t n_globals = safe_read_leb128<uint32_t>(iter);
-
-        globals.reserve(n_globals);
-
-        for (uint32_t i = 0; i < n_globals; ++i) {
-            if (iter.empty()) {
-                throw malformed_error("unexpected end of section or function");
-            }
-
-            uint8_t maybe_type = *iter++;
-            if (!is_valtype(maybe_type)) {
-                throw malformed_error("invalid global type");
-            }
-            valtype type = static_cast<valtype>(maybe_type);
-
-            uint8_t maybe_mut = *iter++;
-            if (!is_mut(maybe_mut)) {
-                throw malformed_error("malformed mutability");
-            }
-            mut global_mut = static_cast<mut>(maybe_mut);
-
-            globals.push_back(std::make_shared<WasmGlobal>(
-                type, global_mut, interpret_const(iter, type)));
-        }
-    });
-
-    skip_custom_section();
-
-    // export section
-    section(7, [&] {
-        uint32_t n_exports = safe_read_leb128<uint32_t>(iter);
-
-        for (uint32_t i = 0; i < n_exports; ++i) {
-            if (iter.empty()) {
-                throw malformed_error("unexpected end of section or function");
-            }
-
-            uint32_t name_len = safe_read_leb128<uint32_t>(iter);
-            std::string name(
-                reinterpret_cast<char *>(iter.get_with_at_least(name_len)),
-                name_len);
-            iter += name_len;
-
-            uint8_t desc = *iter++;
-            if (desc > 3) {
-                throw validation_error("invalid export description");
-            }
-            ExportDesc export_desc = static_cast<ExportDesc>(desc);
-
-            uint32_t idx = safe_read_leb128<uint32_t>(iter);
-
-            if (exports.contains(name)) {
-                throw validation_error("duplicate export name");
-            }
-
-            if (export_desc == ExportDesc::func) {
-                if (idx >= functions.size()) {
-                    throw validation_error("unknown function");
-                }
-                // implicit reference declaration
-                funcrefs[idx].instance = this;
-                const auto &fn = functions[idx];
-                exports[name] = externalize_function(fn);
-            } else if (export_desc == ExportDesc::table) {
-                if (idx >= tables.size()) {
-                    throw validation_error("unknown table");
-                }
-                exports[name] = tables[idx];
-            } else if (export_desc == ExportDesc::mem) {
-                if (idx != 0 || !memory) {
-                    throw validation_error("unknown memory");
-                }
-                exports[name] = memory;
-            } else if (export_desc == ExportDesc::global) {
-                if (idx >= globals.size()) {
-                    throw validation_error("unknown global");
-                }
-                exports[name] = globals[idx];
-            }
-        }
-    });
-
-    skip_custom_section();
-
-    // start section
-    uint32_t start = std::numeric_limits<uint32_t>::max();
-    section(8, [&] {
-        start = safe_read_leb128<uint32_t>(iter);
-        if (start >= functions.size()) {
-            throw validation_error("unknown function");
-        }
-    });
-
-    skip_custom_section();
-
-    // element section
-    section(9, [&] {
-        uint32_t n_elements = safe_read_leb128<uint32_t>(iter);
-
-        elements.reserve(n_elements);
-
-        for (uint32_t i = 0; i < n_elements; i++) {
-            /*
-            why is this not needed
-            if (iter.empty()) {
-                throw malformed_error("unexpected end of section or function");
-            }
-            */
-            uint32_t flags = safe_read_leb128<uint32_t>(iter);
-            if (flags & ~0b111) {
-                throw validation_error("invalid element flags");
-            }
-
-            if (flags & 1) {
-                if (flags & 0b10) {
-                    if (flags & 0b100) {
-                        // flags = 7
-                        // characteristics: declarative, elem type + exprs
-                        uint32_t maybe_reftype = *iter++;
-                        if (!is_reftype(maybe_reftype)) {
-                            throw malformed_error("malformed reference type");
-                        }
-                        valtype reftype = static_cast<valtype>(maybe_reftype);
-                        uint32_t n_elements = safe_read_leb128<uint32_t>(iter);
-                        for (uint32_t j = 0; j < n_elements; j++) {
-                            interpret_const(iter, reftype);
-                        }
-                        elements.emplace_back(ElementSegment{reftype, {}});
-                    } else {
-                        // flags = 3
-                        // characteristics: declarative, elem kind + indices
-                        uint8_t elemkind = *iter++;
-                        if (elemkind != 0) {
-                            throw validation_error("invalid elemkind");
-                        }
-                        uint32_t n_elements = safe_read_leb128<uint32_t>(iter);
-                        for (uint32_t j = 0; j < n_elements; j++) {
-                            uint32_t elem_idx =
-                                safe_read_leb128<uint32_t>(iter);
-                            if (elem_idx >= functions.size()) {
-                                throw validation_error("unknown function");
-                            }
-                            // implicit reference declaration
-                            funcrefs[elem_idx].instance = this;
-                        }
-                        elements.emplace_back(
-                            ElementSegment{valtype::funcref, {}});
+        if (flags & 1) {
+            if (flags & 0b10) {
+                if (flags & 0b100) {
+                    // flags = 7
+                    // characteristics: declarative, elem type + exprs
+                    valtype reftype = static_cast<valtype>(*iter++);
+                    uint32_t n_elements = read_leb128(iter);
+                    for (uint32_t j = 0; j < n_elements; j++) {
+                        interpret_const(iter);
                     }
+                    elements[i] = ElementSegment{reftype, {}};
                 } else {
-                    if (flags & 0b100) {
-                        // flags = 5
-                        // characteristics: passive, elem type + exprs
-                        uint8_t maybe_reftype = *iter++;
-                        if (!is_reftype(maybe_reftype)) {
-                            throw malformed_error("malformed reference type");
-                        }
-                        valtype reftype = static_cast<valtype>(maybe_reftype);
-                        uint32_t n_elements = safe_read_leb128<uint32_t>(iter);
-                        std::vector<WasmValue> elem(n_elements);
-                        for (uint32_t j = 0; j < n_elements; j++) {
-                            elem[j] = interpret_const(iter, reftype);
-                        }
-                        elements.emplace_back(ElementSegment{reftype, elem});
-                    } else {
-                        // flags = 1
-                        // characteristics: passive, elem kind + indices
-                        uint8_t elemkind = *iter++;
-                        if (elemkind != 0) {
-                            throw validation_error("invalid elemkind");
-                        }
-                        uint32_t n_elements = safe_read_leb128<uint32_t>(iter);
-                        std::vector<WasmValue> elem(n_elements);
-                        for (uint32_t j = 0; j < n_elements; j++) {
-                            uint32_t elem_idx =
-                                safe_read_leb128<uint32_t>(iter);
-                            if (elem_idx >= functions.size()) {
-                                throw validation_error("unknown function");
-                            }
-                            elem[j] = &funcrefs[elem_idx];
-                            // implicit reference declaration
-                            funcrefs[elem_idx].instance = this;
-                        }
-                        elements.emplace_back(
-                            ElementSegment{valtype::funcref, elem});
+                    // flags = 3
+                    // characteristics: declarative, elem kind + indices
+                    /* uint8_t elemkind = * */ iter++;
+                    uint32_t n_elements = read_leb128(iter);
+                    for (uint32_t j = 0; j < n_elements; j++) {
+                        read_leb128(iter);
                     }
+                    elements[i] = ElementSegment{valtype::funcref, {}};
                 }
             } else {
-                uint32_t table_idx =
-                    flags & 0b10 ? safe_read_leb128<uint32_t>(iter) : 0;
-                if (table_idx >= tables.size()) {
-                    throw validation_error("unknown table");
-                }
-
-                valtype reftype;
-
-                uint32_t offset = interpret_const(iter, valtype::i32).u32;
-                uint16_t reftype_or_elemkind = flags & 0b10 ? *iter++ : 256;
-                uint32_t n_elements = safe_read_leb128<uint32_t>(iter);
-                if (offset + n_elements > tables[table_idx]->size()) {
-                    throw uninstantiable_error("out of bounds table access");
-                }
-
-                std::vector<WasmValue> elem(n_elements);
                 if (flags & 0b100) {
-                    // flags = 4 or 6
-                    // characteristics: active, elem type + exprs
-                    if (reftype_or_elemkind == 256)
-                        reftype_or_elemkind =
-                            static_cast<uint16_t>(valtype::funcref);
-                    if (!is_reftype(reftype_or_elemkind)) {
-                        throw malformed_error("malformed reference type");
-                    }
-                    reftype = static_cast<valtype>(reftype_or_elemkind);
-                    if (tables[table_idx]->type != reftype) {
-                        throw validation_error("type mismatch");
-                    }
+                    // flags = 5
+                    // characteristics: passive, elem type + exprs
+                    valtype reftype = static_cast<valtype>(*iter++);
+                    uint32_t n_elements = read_leb128(iter);
+                    std::vector<WasmValue> elem(n_elements);
                     for (uint32_t j = 0; j < n_elements; j++) {
-                        WasmValue el = interpret_const(iter, reftype);
-                        elem[j] = el;
-                        if (offset + j >= tables[table_idx]->size()) {
-                            throw uninstantiable_error(
-                                "out of bounds table access");
-                        }
-                        tables[table_idx]->set(offset + j, el);
+                        elem[j] = interpret_const(iter);
                     }
+                    elements[i] = ElementSegment{reftype, elem};
                 } else {
-                    if (reftype_or_elemkind == 256)
-                        reftype_or_elemkind = 0;
-                    if (reftype_or_elemkind != 0) {
-                        throw validation_error("invalid elemkind");
-                    }
-                    reftype = valtype::funcref;
-                    if (tables[table_idx]->type != reftype) {
-                        throw validation_error("type mismatch");
-                    }
-                    // flags = 0 or 2
-                    // characteristics: active, elem kind + indices
+                    // flags = 1
+                    // characteristics: passive, elem kind + indices
+                    /* uint8_t elemkind = * */ iter++;
+                    uint32_t n_elements = read_leb128(iter);
+                    std::vector<WasmValue> elem(n_elements);
                     for (uint32_t j = 0; j < n_elements; j++) {
-                        uint32_t elem_idx = safe_read_leb128<uint32_t>(iter);
-                        if (elem_idx >= functions.size()) {
-                            throw validation_error("unknown function");
-                        }
-                        WasmValue funcref = &funcrefs[elem_idx];
-                        // implicit reference declaration
-                        funcref.funcref->instance = this;
-                        elem[j] = funcref;
-                        if (offset + j >= tables[table_idx]->size()) {
-                            throw uninstantiable_error(
-                                "out of bounds table access");
-                        }
-                        tables[table_idx]->set(offset + j, funcref);
+                        elem[j] = &functions[read_leb128(iter)];
                     }
+                    elements[i] = ElementSegment{valtype::funcref, elem};
                 }
-                elements.emplace_back(ElementSegment{reftype, {}});
             }
-        }
-    });
+        } else {
+            valtype reftype;
 
-    skip_custom_section();
-
-    // data count section
-    uint32_t n_data = std::numeric_limits<uint32_t>::max();
-    section(12, [&] { n_data = safe_read_leb128<uint32_t>(iter); });
-
-    skip_custom_section();
-
-    // code section
-    section(
-        10,
-        [&] {
-            uint32_t n_functions = safe_read_leb128<uint32_t>(iter);
-
-            if (n_functions + n_fn_imports != functions.size()) {
-                throw malformed_error(
-                    "function and code section have inconsistent lengths");
+            auto table = tables[flags & 0b10 ? read_leb128(iter) : 0];
+            uint32_t offset = interpret_const(iter).u32;
+            uint16_t reftype_or_elemkind = flags & 0b10 ? *iter++ : 256;
+            uint32_t n_elements = read_leb128(iter);
+            if (offset + n_elements > table->size()) {
+                throw uninstantiable_error("out of bounds table access");
             }
 
-            for (FunctionInfo &fn : functions) {
-                if (fn.static_fn || fn.dyn_fn) {
-                    // skip imported functions
-                    continue;
-                }
+            std::vector<WasmValue> elem(n_elements);
+            if (flags & 0b100) {
+                // flags = 4 or 6
+                // characteristics: active, elem type + exprs
+                if (reftype_or_elemkind == 256)
+                    reftype_or_elemkind =
+                        static_cast<uint16_t>(valtype::funcref);
+                reftype = static_cast<valtype>(reftype_or_elemkind);
 
-                fn.locals = fn.type.params;
-
-                uint32_t function_length = safe_read_leb128<uint32_t>(iter);
-
-                safe_byte_iterator start = iter;
-
-                uint32_t n_local_decls = safe_read_leb128<uint32_t>(iter);
-                while (n_local_decls--) {
-                    uint32_t n_locals = safe_read_leb128<uint32_t>(iter);
-                    uint8_t type = *iter++;
-                    if (!is_valtype(type)) {
-                        throw validation_error("invalid local type");
-                    }
-                    while (n_locals--) {
-                        fn.locals.push_back(static_cast<valtype>(type));
-                        if (fn.locals.size() > MAX_LOCALS) {
-                            throw malformed_error("too many locals");
-                        }
-                    }
-                }
-                fn.start =
-                    iter.get_with_at_least(function_length - (iter - start));
-
-                iter = start + function_length;
-            }
-        },
-        [&] {
-            if (functions.size() != n_fn_imports) {
-                throw malformed_error(
-                    "function and code section have inconsistent lengths");
-            }
-        });
-
-    skip_custom_section();
-
-    // data section
-    section(
-        11,
-        [&] {
-            uint32_t section_n_data = safe_read_leb128<uint32_t>(iter);
-            if (n_data == std::numeric_limits<uint32_t>::max())
-                n_data = section_n_data;
-            if (n_data != section_n_data) {
-                throw malformed_error(
-                    "data count and data section have inconsistent lengths");
-            }
-
-            for (uint32_t i = 0; i < n_data; i++) {
-                if (iter.empty()) {
-                    throw malformed_error(
-                        "unexpected end of section or function");
-                }
-
-                uint32_t segment_flag = safe_read_leb128<uint32_t>(iter);
-                if (segment_flag & ~0b11) {
-                    throw validation_error("invalid data segment flag");
-                }
-
-                uint32_t memidx =
-                    segment_flag & 0b10 ? safe_read_leb128<uint32_t>(iter) : 0;
-
-                if (memidx != 0) {
-                    throw validation_error("unknown memory " +
-                                           std::to_string(memidx));
-                }
-
-                if (segment_flag & 1) {
-                    // passive segment
-
-                    uint32_t data_length = safe_read_leb128<uint32_t>(iter);
-                    if (!iter.has_n_left(data_length)) {
-                        throw malformed_error(
-                            "unexpected end of section or function");
-                    }
-                    std::vector<uint8_t> data(data_length);
-                    std::memcpy(data.data(),
-                                iter.get_with_at_least(data_length),
-                                data_length);
-                    iter += data_length;
-
-                    data_segments.emplace_back(
-                        Segment{memidx, std::move(data)});
-                } else {
-                    // active segment
-                    if (!memory) {
-                        throw validation_error("unknown memory 0");
-                    }
-
-                    // larger data type to account for potential addition
-                    // overflow
-                    uint64_t offset = interpret_const(iter, valtype::i32).u32;
-                    uint64_t data_length = safe_read_leb128<uint32_t>(iter);
-                    if (offset + data_length >
-                        memory->size() *
-                            static_cast<uint64_t>(WasmMemory::PAGE_SIZE)) {
+                for (uint32_t j = 0; j < n_elements; j++) {
+                    WasmValue ref = interpret_const(iter);
+                    elem[j] = ref;
+                    if (offset + j >= table->size()) {
                         throw uninstantiable_error(
-                            "out of bounds memory access");
+                            "out of bounds table access");
                     }
-                    if (!iter.has_n_left(data_length)) {
-                        throw malformed_error(
-                            "unexpected end of section or function");
+                    table->set(offset + j, ref);
+                }
+            } else {
+                if (reftype_or_elemkind == 256)
+                    reftype_or_elemkind = 0;
+                reftype = valtype::funcref;
+
+                // flags = 0 or 2
+                // characteristics: active, elem kind + indices
+                for (uint32_t j = 0; j < n_elements; j++) {
+                    uint32_t elem_idx = read_leb128(iter);
+                    WasmValue funcref = &functions[elem_idx];
+                    elem[j] = funcref;
+                    if (offset + j >= table->size()) {
+                        throw uninstantiable_error(
+                            "out of bounds table access");
                     }
-
-                    std::vector<uint8_t> data(data_length);
-                    std::memcpy(data.data(),
-                                iter.get_with_at_least(data_length),
-                                data_length);
-                    iter += data_length;
-
-                    memory->copy_into(offset, data.data(), data_length);
-
-                    data_segments.emplace_back(Segment{memidx, {}});
+                    table->set(offset + j, funcref);
                 }
             }
-        },
-        [&] {
-            if (n_data != 0 && n_data != std::numeric_limits<uint32_t>::max()) {
-                throw malformed_error(
-                    "data count and data section have inconsistent lengths");
-            }
-        });
-
-    skip_custom_section();
-
-    if (!iter.empty()) {
-        throw malformed_error("unexpected content after last section");
+            elements[i] = ElementSegment{reftype, {}};
+        }
     }
 
-    Validator(*this).validate(bytes.get() + length);
+    for (uint32_t i = 0; i < data_segments.size(); i++) {
+        const auto &data = module->data_segments[i];
+        if (data.initializer) {
+            uint32_t offset = interpret_const_inplace(data.initializer).u32;
+            if (offset + data.data.size() >
+                memory->size() * WasmMemory::PAGE_SIZE) {
+                throw uninstantiable_error("out of bounds memory access");
+            }
+            memory->copy_into(offset, data.data.data(), data.data.size());
 
-    if (start != std::numeric_limits<uint32_t>::max()) {
-        const auto &fn = functions[start];
-        if (fn.type.params.size() || fn.type.results.size()) {
+            data_segments[i] = {};
+        } else {
+            data_segments[i] = data;
+        }
+    }
+
+    for (const auto &[name, export_] : module->exports) {
+        switch (export_.desc) {
+        case ImExDesc::func:
+            exports[name] = externalize_function(functions[export_.idx]);
+            break;
+        case ImExDesc::table:
+            exports[name] = tables[export_.idx];
+            break;
+        case ImExDesc::mem:
+            exports[name] = memory;
+            break;
+        case ImExDesc::global:
+            exports[name] = globals[export_.idx];
+            break;
+        }
+    }
+
+    if (module->start != std::numeric_limits<uint32_t>::max()) {
+        const auto &fn = functions[module->start];
+        if (fn.type.n_params || fn.type.n_results) {
             throw validation_error("start function");
         }
         try {
-            entrypoint(fn);
+            entrypoint(fn, initial_stack);
         } catch (const trap_error &e) {
             throw uninstantiable_error(e.what());
         }
     }
 }
 
+WasmValue Instance::interpret_const(uint8_t *&iter) {
+    std::vector<WasmValue> stack;
+
+#define OP(ty, op)                                                             \
+    {                                                                          \
+        auto arg1 = stack.back();                                              \
+        stack.pop_back();                                                      \
+        auto arg2 = stack.back();                                              \
+        stack.pop_back();                                                      \
+        stack.push_back(arg1.ty op arg2.ty);                                   \
+        break;                                                                 \
+    }
+#define I32_OP(op) OP(i32, op)
+#define I64_OP(op) OP(i64, op)
+
+    while (1) {
+        uint8_t byte = *iter++;
+#ifdef WASM_DEBUG
+        std::cerr << "reading instruction " << instructions[byte].c_str()
+                  << " at " << iter - module->bytes.get() << std::endl;
+#endif
+
+        using enum Instruction;
+        if (static_cast<Instruction>(byte) == end) {
+            break;
+        }
+        switch (static_cast<Instruction>(byte)) {
+        case i32const:
+            stack.push_back((int32_t)read_sleb128<32>(iter));
+            break;
+        case i64const:
+            stack.push_back((int64_t)read_sleb128<64>(iter));
+            break;
+        case f32const: {
+            float x;
+            std::memcpy(&x, iter, sizeof(float));
+            stack.push_back(x);
+            iter += sizeof(float);
+            break;
+        }
+        case f64const: {
+            double x;
+            std::memcpy(&x, iter, sizeof(double));
+            stack.push_back(x);
+            iter += sizeof(double);
+            break;
+        }
+        case globalget:
+            stack.push_back(globals[read_leb128(iter)]->value);
+            break;
+        case i32add:
+            I32_OP(+);
+        case i32sub:
+            I32_OP(-);
+        case i32mul:
+            I32_OP(*);
+        case i64add:
+            I64_OP(+);
+        case i64sub:
+            I64_OP(-);
+        case i64mul:
+            I64_OP(*);
+        case ref_null: {
+            read_leb128(iter);
+            stack.push_back((void *)nullptr);
+            break;
+        }
+        case ref_func: {
+            uint32_t func_idx = safe_read_leb128<uint32_t>(iter);
+            stack.push_back(&functions[func_idx]);
+            break;
+        }
+        default:
+            __builtin_unreachable();
+        }
+    }
+
+    return stack.back();
+
+#undef OP
+#undef I32_OP
+#undef I64_OP
+} // namespace mitey
+
 FunctionInfo Instance::externalize_function(const FunctionInfo &fn) {
     if (fn.static_fn || fn.dyn_fn) {
         // already external
         return fn;
     } else {
-        return FunctionInfo(
-            [&](WasmValue *extern_stack) {
-                const auto &type = fn.type;
+        return FunctionInfo(fn.type, [&](WasmValue *extern_stack) {
+            const auto &type = fn.type;
 
-                for (uint32_t i = 0; i < type.params.size(); i++) {
-                    initial_stack.push(extern_stack[i]);
-                }
+            for (uint32_t i = 0; i < type.n_params; i++) {
+                initial_stack.push(extern_stack[i]);
+            }
 
-                try {
-                    entrypoint(fn);
-                } catch (const trap_error &e) {
-                    initial_stack.clear();
-                    control_stack.clear();
-                    frames.clear();
-                    throw;
-                }
+            try {
+                entrypoint(fn, initial_stack);
+            } catch (const trap_error &e) {
+                initial_stack.clear();
+                control_stack.clear();
+                frames.clear();
+                throw;
+            }
 
-                initial_stack -= type.results.size();
-                for (uint32_t i = 0; i < type.results.size(); i++) {
-                    extern_stack[i] = initial_stack[i];
-                }
-            },
-            fn.type);
+            initial_stack -= type.n_results;
+            for (uint32_t i = 0; i < type.n_results; i++) {
+                extern_stack[i] = initial_stack[i];
+            }
+        });
     }
 }
 
-void Instance::entrypoint(const FunctionInfo &fn) {
-    entrypoint(fn, this->initial_stack);
-}
 void Instance::entrypoint(const FunctionInfo &fn, tape<WasmValue> &stack) {
     auto backup_cs = control_stack;
     auto backup_frames = frames;
@@ -924,7 +390,7 @@ void Instance::entrypoint(const FunctionInfo &fn, tape<WasmValue> &stack) {
 
     try {
         call_function_info(fn, nullptr, stack,
-                           [&] { interpret(fn.start, stack); });
+                           [&] { interpret(fn.wasm_fn.start, stack); });
         control_stack = backup_cs;
         frames = backup_frames;
     } catch (const trap_error &) {
@@ -940,11 +406,11 @@ inline void Instance::call_function_info(const FunctionInfo &fn,
                                          uint8_t *return_to,
                                          tape<WasmValue> &stack,
                                          std::function<void()> wasm_call) {
-    if (fn.start != nullptr) {
+    if (fn.wasm_fn) {
         // parameters are the first locals and they're taken from the top of
         // the stack
-        WasmValue *locals_start = stack.unsafe_ptr() - fn.type.params.size();
-        WasmValue *locals_end = locals_start + fn.locals.size();
+        WasmValue *locals_start = stack.unsafe_ptr() - fn.type.n_params;
+        WasmValue *locals_end = locals_start + fn.wasm_fn.n_locals;
         // zero out non-parameter locals
         std::memset(reinterpret_cast<void *>(stack.unsafe_ptr()), 0,
                     (locals_end - stack.unsafe_ptr()) * sizeof(WasmValue));
@@ -952,153 +418,18 @@ inline void Instance::call_function_info(const FunctionInfo &fn,
         frames.push({locals_start, control_stack.get_start()});
         control_stack.set_start(control_stack.unsafe_ptr());
         control_stack.push({locals_start, return_to,
-                            static_cast<uint32_t>(fn.type.results.size())});
+                            static_cast<uint32_t>(fn.type.n_results)});
 
         wasm_call();
     } else {
-        stack -= fn.type.params.size();
+        stack -= fn.type.n_params;
         if (fn.static_fn != nullptr) {
             fn.static_fn(stack.unsafe_ptr());
         } else {
             fn.dyn_fn(stack.unsafe_ptr());
         }
-        stack += fn.type.results.size();
+        stack += fn.type.n_results;
     }
-}
-
-// constant expressions (including extended const expression proposal)
-// this shoves validation and execution into one for simplicity(?)
-WasmValue Instance::interpret_const(safe_byte_iterator &iter,
-                                    valtype expected) {
-    tape<WasmValue> &stack = initial_stack;
-    std::vector<valtype> stack_types;
-
-#define OP(ty, op)                                                             \
-    {                                                                          \
-        if (stack_types.size() < 2) {                                          \
-            throw validation_error("type mismatch");                           \
-        }                                                                      \
-        if (stack_types[stack_types.size() - 1] != stack_types.back()) {       \
-            throw validation_error("type mismatch");                           \
-        }                                                                      \
-        if (stack_types.back() != valtype::ty) {                               \
-            throw validation_error("type mismatch");                           \
-        }                                                                      \
-        stack_types.pop_back();                                                \
-        stack.pop();                                                           \
-        stack[-1].ty = stack[-1].ty op stack[0].ty;                            \
-        break;                                                                 \
-    }
-#define I32_OP(op) OP(i32, op)
-#define I64_OP(op) OP(i64, op)
-
-    while (1) {
-        uint8_t byte = *iter++;
-#ifdef WASM_DEBUG
-        std::cerr << "reading const instruction " << instructions[byte].c_str()
-                  << " at " << iter - bytes.get() << std::endl;
-        std::cerr << "stack contents: ";
-        for (WasmValue *p = stack.get_start(); p < stack.unsafe_ptr(); p++) {
-            std::cerr << p->u64 << " ";
-        }
-        std::cerr << std::endl << std::endl;
-#endif
-        using enum Instruction;
-        if (static_cast<Instruction>(byte) == end) {
-            break;
-        }
-        switch (static_cast<Instruction>(byte)) {
-        case i32const:
-            stack.push(safe_read_sleb128<int32_t>(iter));
-            stack_types.push_back(valtype::i32);
-            break;
-        case i64const:
-            stack.push(safe_read_sleb128<int64_t>(iter));
-            stack_types.push_back(valtype::i64);
-            break;
-        case f32const: {
-            float x;
-            std::memcpy(&x, iter.get_with_at_least(sizeof(float)),
-                        sizeof(float));
-            stack.push(x);
-            iter += sizeof(float);
-            stack_types.push_back(valtype::f32);
-            break;
-        }
-        case f64const: {
-            double x;
-            std::memcpy(&x, iter.get_with_at_least(sizeof(double)),
-                        sizeof(double));
-            stack.push(x);
-            iter += sizeof(double);
-            stack_types.push_back(valtype::f64);
-            break;
-        }
-        case globalget: {
-            uint32_t global_idx = safe_read_leb128<uint32_t>(iter);
-            if (global_idx >= globals.size()) {
-                throw validation_error("unknown global " +
-                                       std::to_string(global_idx));
-            }
-            stack.push(globals[global_idx]->value);
-            stack_types.push_back(globals[global_idx]->type);
-            break;
-        }
-        case i32add:
-            I32_OP(+);
-        case i32sub:
-            I32_OP(-);
-        case i32mul:
-            I32_OP(*);
-        case i64add:
-            I64_OP(+);
-        case i64sub:
-            I64_OP(-);
-        case i64mul:
-            I64_OP(*);
-        case ref_null: {
-            stack.push((void *)nullptr);
-            uint32_t reftype = safe_read_leb128<uint32_t>(iter);
-            if (!is_reftype(reftype)) {
-                throw validation_error("type mismatch");
-            }
-            stack_types.push_back(static_cast<valtype>(reftype));
-            break;
-        }
-        case ref_func: {
-            uint32_t func_idx = safe_read_leb128<uint32_t>(iter);
-            if (func_idx >= functions.size()) {
-                throw validation_error("unknown function");
-            }
-            // implicit reference declaration
-            funcrefs[func_idx].instance = this;
-            stack.push(&funcrefs[func_idx]);
-            stack_types.push_back(valtype::funcref);
-            break;
-        }
-        default:
-            if (is_instruction(byte)) {
-                throw validation_error("constant expression required");
-            } else {
-                throw malformed_error("illegal opcode");
-            }
-        }
-    }
-
-#undef OP
-#undef I32_OP
-#undef I64_OP
-
-    if (stack.size() != 1 || stack_types.size() != 1 ||
-        stack_types[0] != expected) {
-        throw validation_error("type mismatch");
-    }
-
-#ifdef WASM_DEBUG
-    std::cerr << "const expression result: " << stack[-1].u64 << std::endl;
-#endif
-
-    return stack.pop();
 }
 
 void Instance::interpret(uint8_t *iter, tape<WasmValue> &stack) {
@@ -1247,7 +578,7 @@ void Instance::interpret(uint8_t *iter, tape<WasmValue> &stack) {
         uint8_t byte = *iter++;
 #ifdef WASM_DEBUG
         std::cerr << "reading instruction " << instructions[byte].c_str()
-                  << " at " << iter - bytes.get() << std::endl;
+                  << " at " << iter - module->bytes.get() << std::endl;
         std::cerr << "stack contents: ";
         for (WasmValue *p = frame().locals; p < stack.unsafe_ptr(); p++) {
             std::cerr << p->u64 << " ";
@@ -1261,37 +592,37 @@ void Instance::interpret(uint8_t *iter, tape<WasmValue> &stack) {
         case nop:
             break;
         case block: {
-            Signature sn = read_blocktype(iter);
-            control_stack.push({stack.unsafe_ptr(-sn.params.size()),
+            auto sn = RuntimeType::read_blocktype(types, iter);
+            control_stack.push({stack.unsafe_ptr() - sn.n_params,
                                 block_ends[iter],
-                                static_cast<uint32_t>(sn.results.size())});
+                                static_cast<uint32_t>(sn.n_results)});
             break;
         }
         case loop: {
             // reading blocktype each time maybe not efficient?
             uint8_t *loop_start = iter - 1;
-            Signature sn = read_blocktype(iter);
+            auto sn = RuntimeType::read_blocktype(types, iter);
             control_stack.push(
                 // iter - 1 so br goes back to the loop
-                {stack.unsafe_ptr(-sn.params.size()), loop_start,
-                 static_cast<uint32_t>(sn.params.size())});
+                {stack.unsafe_ptr() - sn.n_params, loop_start,
+                 static_cast<uint32_t>(sn.n_params)});
             break;
         }
         case if_: {
-            Signature sn = read_blocktype(iter);
+            auto sn = RuntimeType::read_blocktype(types, iter);
             uint32_t cond = stack.pop().u32;
-            control_stack.push({stack.unsafe_ptr(-sn.params.size()),
+            control_stack.push({stack.unsafe_ptr() - sn.n_params,
                                 if_jumps[iter].end,
-                                static_cast<uint32_t>(sn.results.size())});
+                                static_cast<uint32_t>(sn.n_results)});
             if (!cond)
                 iter = if_jumps[iter].else_;
             break;
         }
         case else_:
             // if the else block is reached, the if block is done
-            // might be faster to have another dictionary for else block -> end
-            // so this can just be iter = end_block
-            // todo: look at what compiler optimizes to
+            // might be faster to have another dictionary for else block ->
+            // end so this can just be iter = end_block todo: look at what
+            // compiler optimizes to
             brk(0);
             break;
         case end:
@@ -1304,7 +635,8 @@ void Instance::interpret(uint8_t *iter, tape<WasmValue> &stack) {
                 // so can't do brk(0)
                 // BUT validation has confirmed that the result is
                 // the only thing left on the stack, so we can just
-                // pop the control stack (since the result is already in place)
+                // pop the control stack (since the result is already in
+                // place)
                 control_stack.pop();
             }
             break;
@@ -1344,7 +676,8 @@ void Instance::interpret(uint8_t *iter, tape<WasmValue> &stack) {
             break;
         case call: {
             FunctionInfo &fn = functions[read_leb128(iter)];
-            call_function_info(fn, iter, stack, [&] { iter = fn.start; });
+            call_function_info(fn, iter, stack,
+                               [&] { iter = fn.wasm_fn.start; });
             break;
         }
         case call_indirect: {
@@ -1359,12 +692,24 @@ void Instance::interpret(uint8_t *iter, tape<WasmValue> &stack) {
             if (!funcref) {
                 trap("uninitialized element");
             }
-            if (funcref->typeidx != types[type_idx].typeidx) {
+            if (funcref->type != types[type_idx]) {
                 trap("indirect call type mismatch");
             }
-            Instance &callee = *funcref->instance;
-            FunctionInfo &fn = callee.functions[funcref->funcidx];
-            callee.entrypoint(fn, stack);
+
+            // this is so bad, there's so much repetition
+            // entrypooint and call_function_info need to be revamped
+            auto &fn = *funcref;
+            if (fn.wasm_fn) {
+                fn.wasm_fn.instance->entrypoint(fn, stack);
+            } else {
+                stack -= fn.type.n_params;
+                if (fn.static_fn != nullptr) {
+                    fn.static_fn(stack.unsafe_ptr());
+                } else {
+                    fn.dyn_fn(stack.unsafe_ptr());
+                }
+                stack += fn.type.n_results;
+            }
             break;
         }
         case drop:
@@ -1437,7 +782,7 @@ void Instance::interpret(uint8_t *iter, tape<WasmValue> &stack) {
             iter += sizeof(double);
             break;
         }
-        // clang-format off
+            // clang-format off
         case i32load:      LOAD(u32, uint32_t);
         case i64load:      LOAD(u64, uint64_t);
         case f32load:      LOAD(f32, float);
@@ -1602,10 +947,7 @@ void Instance::interpret(uint8_t *iter, tape<WasmValue> &stack) {
         }
         case ref_func: {
             uint32_t func_idx = read_leb128(iter);
-            if (func_idx >= functions.size()) {
-                trap("unknown function");
-            }
-            stack.push(&funcrefs[func_idx]);
+            stack.push(&functions[func_idx]);
             break;
         }
         // bitwise comparison applies to both
@@ -1614,7 +956,7 @@ void Instance::interpret(uint8_t *iter, tape<WasmValue> &stack) {
             uint8_t byte = read_leb128(iter);
 #if WASM_DEBUG
             std::cerr << "reading multibyte instruction " << multibyte_instructions[byte].c_str()
-                      << " at " << iter - bytes.get() << std::endl;
+                      << " at " << iter - module->bytes.get() << std::endl;
 #endif
             using enum FCInstruction;
 
@@ -1641,7 +983,7 @@ void Instance::interpret(uint8_t *iter, tape<WasmValue> &stack) {
                 }
                 case data_drop: {
                     uint32_t seg_idx = read_leb128(iter);
-                    data_segments[seg_idx].data.clear();
+                    data_segments[seg_idx].data = {};
                     break;
                 }
                 case memory_copy: {
