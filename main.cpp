@@ -1,9 +1,7 @@
 #include "instance.hpp"
 #include "module.hpp"
 #include <chrono>
-#include <iostream>
 #include <memory>
-#include <variant>
 
 uint64_t clock_ms() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(

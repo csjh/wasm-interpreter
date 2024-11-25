@@ -80,9 +80,6 @@ bool safe_byte_iterator::has_n_left(size_t n) const { return iter + n <= end; }
 std::tuple<uint32_t, uint32_t> get_limits(safe_byte_iterator &iter,
                                           uint32_t upper_limit) {
     uint32_t flags = safe_read_leb128<uint32_t, 1>(iter);
-    if (flags != 0 && flags != 1) {
-        throw malformed_error("integer too large");
-    }
     uint32_t initial = safe_read_leb128<uint32_t>(iter);
     uint32_t max = flags == 1 ? safe_read_leb128<uint32_t>(iter) : upper_limit;
     return {initial, max};
@@ -608,13 +605,10 @@ void Module::initialize(uint32_t length) {
 
         element_start = iter.unsafe_ptr();
         for (uint32_t i = 0; i < n_elements; i++) {
-            /*
-            why is this not needed
             if (iter.empty()) {
-                throw malformed_error("unexpected end of section or
-            function");
+                throw malformed_error("unexpected end of section or function");
             }
-            */
+
             uint32_t flags = safe_read_leb128<uint32_t>(iter);
             if (flags & ~0b111) {
                 throw validation_error("invalid element flags");
@@ -1310,7 +1304,7 @@ void Module::validate(safe_byte_iterator &iter, const Signature &signature,
             iter += sizeof(double);
             apply({{}, {valtype::f64}});
             break;
-        // clang-format off
+            // clang-format off
         case i32load:     LOAD(uint32_t,  valtype::i32);
         case i64load:     LOAD(uint64_t,  valtype::i64);
         case f32load:     LOAD(float,     valtype::f32);

@@ -1,9 +1,15 @@
 #pragma once
 
 #include "spec.hpp"
-#include <array>
 #include <span>
 #include <vector>
+
+#ifdef __SIZEOF_INT128__
+using cmp128_t = __int128_t;
+#else
+#include <array>
+using cmp128_t = std::array<uint64_t, 2>;
+#endif
 
 namespace mitey {
 
@@ -34,15 +40,9 @@ union RuntimeType {
         bool has_externref : 1;
         uint64_t hash : 64 - 6;
     };
-#ifdef __SIZEOF_INT128__
-    __uint128_t full;
-#else
-    std::array<uint64_t, 2> full;
-#endif
+    cmp128_t cmp;
 
-    bool operator==(const RuntimeType &other) const {
-        return full == other.full;
-    }
+    bool operator==(const RuntimeType &other) const { return cmp == other.cmp; }
 
     template <typename Types, typename Iter>
     static RuntimeType read_blocktype(Types &types, Iter &iter) {
@@ -202,16 +202,6 @@ struct FunctionInfo {
         using Traits = function_traits<FunctionType *>;
         using ReturnType = typename Traits::return_type;
         constexpr size_t num_args = std::tuple_size_v<typename Traits::args>;
-
-        if (wasm_fn) {
-            trap("non-exported wasm functions cannot be called from the host");
-        }
-        if (!static_fn && !dyn_fn) {
-            trap("function has no implementation");
-        }
-        if (static_fn && dyn_fn) {
-            trap("function has both static and dynamic implementations");
-        }
 
         bool call_static = static_fn != nullptr;
 
