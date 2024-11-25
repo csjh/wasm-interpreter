@@ -1,6 +1,5 @@
 #pragma once
 
-#include <cassert>
 #include <cstdint>
 #include <stdexcept>
 #include <string>
@@ -97,8 +96,6 @@ struct Signature {
             return {{}, {static_cast<valtype>(byte)}};
         } else {
             int64_t n = safe_read_sleb128<int64_t, 33>(iter);
-            assert(n >= 0);
-            assert(static_cast<uint64_t>(n) < types.size());
             return types[n];
         }
     }
@@ -182,7 +179,6 @@ static inline int64_t read_sleb128(Iter &iter) {
 
 template <typename T, uint8_t BITS = sizeof(T) * 8, typename Iter>
 static inline T safe_read_sleb128(Iter &iter) {
-    assert(BITS / 8 <= sizeof(T));
     Iter start = iter;
     int64_t result = read_sleb128<BITS>(iter);
     if (result > static_cast<int64_t>((1ULL << (BITS - 1)) - 1)) {
@@ -222,10 +218,6 @@ static inline T safe_read_leb128(Iter &iter) {
         throw malformed_error("integer representation too long");
     }
     if (sizeof(T) != 8 && result > (1ULL << BITS) - 1) {
-        throw malformed_error("integer too large");
-    }
-    if ((8 - std::countl_zero(static_cast<uint8_t>(iter[-1] & 0x7f)) +
-         (iter - start - 1) * 7) > BITS) {
         throw malformed_error("integer too large");
     }
     return static_cast<T>(result);
