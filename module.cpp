@@ -385,7 +385,7 @@ void Module::initialize(uint32_t length) {
                 field_len);
             iter += field_len;
 
-            uint32_t kind = safe_read_leb128<uint32_t>(iter);
+            uint32_t kind = *iter++;
             if (!is_imexdesc(kind)) {
                 throw malformed_error("malformed import kind");
             }
@@ -746,7 +746,7 @@ void Module::initialize(uint32_t length) {
     skip_custom_section();
 
     // data count section
-    n_data = 0;
+    n_data = std::numeric_limits<uint32_t>::max();
     bool has_data_count = false;
     section(12, [&] {
         n_data = safe_read_leb128<uint32_t>(iter);
@@ -798,8 +798,11 @@ void Module::initialize(uint32_t length) {
 
                 safe_byte_iterator fn_iter = iter;
                 validate(fn_iter, fn);
+                if (fn_iter[-1] != static_cast<uint8_t>(Instruction::end)) {
+                    throw malformed_error("END opcode expected");
+                }
                 if (fn_iter - start != function_length) {
-                    throw malformed_error("function length mismatch");
+                    throw malformed_error("section size mismatch");
                 }
                 iter += fn_iter - iter;
             }
@@ -1522,6 +1525,9 @@ void Module::validate(safe_byte_iterator &iter, const Signature &signature,
                     if (*iter++ != 0) throw malformed_error("zero byte expected");
 
                     ensure(memory.exists, "unknown memory 0");
+                    if (n_data == std::numeric_limits<uint32_t>::max()) {
+                        throw malformed_error("data count section required");
+                    }
                     ensure(seg_idx < n_data, "unknown data segment");
 
                     apply({{valtype::i32, valtype::i32, valtype::i32}, {}});
@@ -1529,6 +1535,9 @@ void Module::validate(safe_byte_iterator &iter, const Signature &signature,
                 }
                 case data_drop: {
                     uint32_t seg_idx = safe_read_leb128<uint32_t>(iter);
+                    if (n_data == std::numeric_limits<uint32_t>::max()) {
+                        throw malformed_error("data count section required");
+                    }
                     ensure(seg_idx < n_data, "unknown data segment");
                     break;
                 }

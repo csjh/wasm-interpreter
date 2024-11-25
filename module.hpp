@@ -402,7 +402,6 @@ class Module {
     std::vector<Signature> types;
     std::unordered_map<std::string, std::unordered_map<std::string, ImExDesc>>
         imports;
-    std::vector<Signature> function_types;
     std::vector<TableShell> tables;
     MemoryShell memory;
     std::vector<GlobalShell> globals;

@@ -452,7 +452,7 @@ int main(int argv, char **argc) {
         }
     };
 
-    uint32_t passes = 0, failures = 0;
+    uint32_t passes = 0, soft_passes = 0, failures = 0;
 
     auto runtime_error = [&]<typename T>(const auto &m) {
         try {
@@ -466,7 +466,7 @@ int main(int argv, char **argc) {
             if (!what.starts_with(m.text) && !m.text.starts_with(what)) {
                 std::cerr << "Expected error message: " << m.text
                           << " but got: " << e.what() << std::endl;
-                failures++;
+                soft_passes++;
             } else {
                 passes++;
             }
@@ -474,7 +474,7 @@ int main(int argv, char **argc) {
             std::cerr << "Expected " << typeid(T).name()
                       << " with message: " << m.text << " but got: " << e.what()
                       << std::endl;
-            failures++;
+            soft_passes++;
         }
     };
 
@@ -490,7 +490,7 @@ int main(int argv, char **argc) {
             if (!what.starts_with(m.text) && !m.text.starts_with(what)) {
                 std::cerr << "Expected error message: " << m.text
                           << " but got: " << e.what() << std::endl;
-                failures++;
+                soft_passes++;
             } else {
                 passes++;
             }
@@ -498,7 +498,7 @@ int main(int argv, char **argc) {
             std::cerr << "Expected " << typeid(T).name()
                       << " with message: " << m.text << " but got: " << e.what()
                       << std::endl;
-            failures++;
+            soft_passes++;
         }
     };
 
@@ -609,6 +609,7 @@ int main(int argv, char **argc) {
     }
 
     std::cout << "Passes: " << passes << std::endl;
+    std::cout << "Soft passes: " << soft_passes << std::endl;
     std::cout << "Failures: " << failures << std::endl;
 
     return 0;

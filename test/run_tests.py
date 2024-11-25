@@ -12,6 +12,7 @@ IGNORE_LIST = [
 test_dir = os.path.dirname(os.path.realpath(__file__))
 
 passed = 0
+soft_passed = 0
 failed = 0
 
 for file in os.listdir("core"):
@@ -33,8 +34,9 @@ for file in os.listdir("core"):
         print(result.stdout.decode("utf-8"))
         print(result.stderr.decode("utf-8"), file=sys.stderr)
 
-        p, f = result.stdout.decode("utf-8").split('\n')[-3:-1]
+        p, sp, f = result.stdout.decode("utf-8").split('\n')[-4:-1]
         passed += int(p[len("Passes: "):])
+        soft_passed += int(sp[len("Soft passes: "):])
         failed += int(f[len("Failures: "):])
 
-print(f"Passed: {passed}, Failed: {failed}")
+print(f"Passed: {passed}, Soft passes: {soft_passed}, Failed: {failed}")
