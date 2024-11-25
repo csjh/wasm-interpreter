@@ -65,6 +65,7 @@ union RuntimeType {
         type.n_results = sig.results.size();
         type.has_i32 = type.has_i64 = type.has_f32 = type.has_f64 =
             type.has_funcref = type.has_externref = false;
+        type.hash = 0;
         for (valtype param : sig.params) {
             switch (param) {
             case valtype::i32:
@@ -88,8 +89,8 @@ union RuntimeType {
             case valtype::empty:
                 throw validation_error("empty type in signature");
             }
-            type.hash ^= static_cast<uint64_t>(param);
             type.hash *= 16777619;
+            type.hash ^= static_cast<uint64_t>(param);
         }
         type.hash *= 31;
         for (valtype result : sig.results) {
@@ -115,8 +116,8 @@ union RuntimeType {
             case valtype::empty:
                 throw validation_error("empty type in signature");
             }
-            type.hash ^= static_cast<uint64_t>(result);
             type.hash *= 31;
+            type.hash ^= static_cast<uint64_t>(result);
         }
         return type;
     }
@@ -198,7 +199,7 @@ struct FunctionInfo {
         : type(type), static_fn(fn) {}
 
     template <typename FunctionType> std::function<FunctionType> to() const {
-        using Traits = function_traits<FunctionType>;
+        using Traits = function_traits<FunctionType *>;
         using ReturnType = typename Traits::return_type;
         constexpr size_t num_args = std::tuple_size_v<typename Traits::args>;
 
