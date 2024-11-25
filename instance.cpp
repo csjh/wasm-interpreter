@@ -2,6 +2,7 @@
 #include "module.hpp"
 #include "spec.hpp"
 #include <algorithm>
+#include <cassert>
 #include <cmath>
 #include <functional>
 #include <limits>
