@@ -4,7 +4,6 @@
 #include <algorithm>
 #include <cmath>
 #include <functional>
-#include <iostream>
 #include <limits>
 
 #ifdef WASM_DEBUG
@@ -226,11 +225,7 @@ void Instance::initialize(const Imports &imports) {
         const auto &data = module->data_segments[i];
         if (data.initializer) {
             uint32_t offset = interpret_const_inplace(data.initializer).u32;
-            if (offset + data.data.size() >
-                memory->size() * WasmMemory::PAGE_SIZE) {
-                throw uninstantiable_error("out of bounds memory access");
-            }
-            memory->copy_into(offset, data.data.data(), data.data.size());
+            memory->copy_into(offset, 0, data, data.data.size());
 
             data_segments[i] = {};
         } else {
@@ -978,10 +973,7 @@ void Instance::interpret(uint8_t *iter, tape<WasmValue> &stack) {
                     uint32_t size = stack.pop().u32;
                     uint32_t src = stack.pop().u32;
                     uint32_t dest = stack.pop().u32;
-                    if (dest + size > memory->size() * WasmMemory::PAGE_SIZE || src + size > data_segments[seg_idx].data.size()) {
-                        trap("out of bounds memory access");
-                    }
-                    memory->copy_into(dest, data_segments[seg_idx].data.data() + src, size);
+                    memory->copy_into(dest, src, data_segments[seg_idx], size);
                     break;
                 }
                 case data_drop: {
@@ -1015,14 +1007,7 @@ void Instance::interpret(uint8_t *iter, tape<WasmValue> &stack) {
 
                     auto& table = tables[table_idx];
                     auto& element = elements[seg_idx];
-                    if (dest + size > table->size() || src + size > element.elements.size()) {
-                        trap("out of bounds table access");
-                    }
-                    if (table->type != element.type) {
-                        trap("type mismatch");
-                    }
-
-                    table->copy_into(dest, element.elements.data() + src, size);
+                    table->copy_into(dest, src, element, size);
                     break;
                 }
                 case elem_drop: {
@@ -1118,11 +1103,13 @@ uint32_t WasmMemory::grow(uint32_t delta) {
     return old_current;
 }
 
-void WasmMemory::copy_into(uint32_t ptr, const uint8_t *data, uint32_t length) {
-    if (static_cast<uint64_t>(ptr) + length > current * PAGE_SIZE) {
+void WasmMemory::copy_into(uint32_t dest, uint32_t src, const Segment &segment,
+                           uint32_t length) {
+    if (static_cast<uint64_t>(dest) + length > current * PAGE_SIZE ||
+        src + length > segment.data.size()) {
         trap("out of bounds memory access");
     }
-    std::memcpy(memory + ptr, data, length);
+    std::memcpy(memory + dest, segment.data.data() + src, length);
 }
 
 void WasmMemory::memcpy(uint32_t dst, uint32_t src, uint32_t length) {
@@ -1189,12 +1176,14 @@ void WasmTable::set(uint32_t idx, WasmValue value) {
     elements[idx] = value;
 }
 
-void WasmTable::copy_into(uint32_t dst, const WasmValue *data,
-                          uint32_t length) {
-    if (static_cast<uint64_t>(dst) + length > current) {
+void WasmTable::copy_into(uint32_t dst, uint32_t src,
+                          const ElementSegment &segment, uint32_t length) {
+    if (static_cast<uint64_t>(dst) + length > current ||
+        src + length > segment.elements.size()) {
         trap("out of bounds table access");
     }
-    std::memcpy(elements + dst, data, length * sizeof(WasmValue));
+    std::memcpy(elements + dst, segment.elements.data() + src,
+                length * sizeof(WasmValue));
 }
 
 void WasmTable::memcpy(WasmTable &dst_table, uint32_t dst, uint32_t src,

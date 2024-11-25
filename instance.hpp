@@ -2,14 +2,11 @@
 
 #include "module.hpp"
 #include "spec.hpp"
-#include <cassert>
 #include <cstdint>
 #include <cstring>
 #include <functional>
-#include <iostream>
 #include <memory>
 #include <unordered_map>
-#include <variant>
 #include <vector>
 
 namespace mitey {
@@ -57,9 +54,15 @@ class WasmMemory {
         std::memcpy(effective, &value, sizeof(T));
     }
 
-    void copy_into(uint32_t ptr, const uint8_t *data, uint32_t length);
+    void copy_into(uint32_t dest, uint32_t src, const Segment &segment,
+                   uint32_t length);
     void memcpy(uint32_t dst, uint32_t src, uint32_t length);
     void memset(uint32_t dst, uint8_t value, uint32_t length);
+};
+
+struct ElementSegment {
+    valtype type;
+    std::vector<WasmValue> elements;
 };
 
 class WasmTable {
@@ -85,7 +88,8 @@ class WasmTable {
     WasmValue get(uint32_t idx);
     void set(uint32_t idx, WasmValue value);
 
-    void copy_into(uint32_t ptr, const WasmValue *data, uint32_t length);
+    void copy_into(uint32_t dest, uint32_t src, const ElementSegment &segment,
+                   uint32_t length);
     void memcpy(WasmTable &dst_table, uint32_t dst, uint32_t src,
                 uint32_t length);
     void memset(uint32_t dst, WasmValue value, uint32_t length);
@@ -196,11 +200,6 @@ template <typename T> class tape {
 
     T *begin() { return start; }
     T *end() { return ptr; }
-};
-
-struct ElementSegment {
-    valtype type;
-    std::vector<WasmValue> elements;
 };
 
 template <typename T> class owned_span : protected std::unique_ptr<T[]> {
