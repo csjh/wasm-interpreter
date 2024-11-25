@@ -226,7 +226,11 @@ void Instance::initialize(const Imports &imports) {
         const auto &data = module->data_segments[i];
         if (data.initializer) {
             uint32_t offset = interpret_const_inplace(data.initializer).u32;
-            memory->copy_into(offset, 0, data, data.data.size());
+            try {
+                memory->copy_into(offset, 0, data, data.data.size());
+            } catch (const trap_error &e) {
+                throw uninstantiable_error(e.what());
+            }
 
             data_segments[i] = {};
         } else {
