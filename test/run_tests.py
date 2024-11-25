@@ -2,12 +2,7 @@ import os
 import subprocess
 import sys
 
-IGNORE_LIST = [
-    # takes a very long time to run
-    "skip-stack-guard-page",
-    # also takes a very long time to run
-    "memory_grow"
-]
+IGNORE_LIST = []
 
 test_dir = os.path.dirname(os.path.realpath(__file__))
 
