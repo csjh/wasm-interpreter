@@ -1,5 +1,15 @@
+#include "instance.hpp"
 #include "module.hpp"
+#include <chrono>
+#include <iostream>
 #include <memory>
+#include <variant>
+
+uint64_t clock_ms() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+               std::chrono::system_clock::now().time_since_epoch())
+        .count();
+}
 
 int main(int argv, char **argc) {
     if (argv < 2) {
@@ -24,5 +34,15 @@ int main(int argv, char **argc) {
     fclose(file);
 
     auto module = mitey::Module::compile(std::move(bytes), length);
-    auto instance = module->instantiate();
+
+    mitey::FunctionInfo clock_fn({{}, {mitey::valtype::i64}},
+                                 mitey::wasm_functionify<clock_ms>);
+    mitey::Imports imports{{"env", {{"clock_ms", clock_fn}}}};
+    auto instance = module->instantiate(imports);
+
+    float score =
+        std::get<mitey::FunctionInfo>(instance->get_exports().at("run"))
+            .to<float()>()();
+
+    printf("Score: %f\n", score);
 }
