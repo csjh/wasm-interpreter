@@ -36,8 +36,9 @@ std::vector<mitey::WasmValue> to_wasm_values(const std::vector<value> &values) {
                     std::numeric_limits<float>::signaling_NaN()));
             } else {
                 uint32_t bytes = std::stoul(v.value);
-                result.push_back(
-                    mitey::WasmValue(*reinterpret_cast<float *>(&bytes)));
+                float value;
+                std::memcpy(&value, &bytes, sizeof(float));
+                result.push_back(mitey::WasmValue(value));
             }
         } else if (v.type == "f64") {
             if (v.value == "nan:canonical") {
@@ -48,8 +49,9 @@ std::vector<mitey::WasmValue> to_wasm_values(const std::vector<value> &values) {
                     std::numeric_limits<double>::signaling_NaN()));
             } else {
                 uint64_t bytes = std::stoull(v.value);
-                result.push_back(
-                    mitey::WasmValue(*reinterpret_cast<double *>(&bytes)));
+                double value;
+                std::memcpy(&value, &bytes, sizeof(double));
+                result.push_back(mitey::WasmValue(value));
             }
         } else if (v.type == "externref") {
             if (v.value == "null") {

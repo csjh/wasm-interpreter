@@ -205,7 +205,6 @@ struct FunctionInfo {
     template <typename FunctionType> std::function<FunctionType> to() const {
         using Traits = function_traits<FunctionType *>;
         using ReturnType = typename Traits::return_type;
-        constexpr size_t num_args = std::tuple_size_v<typename Traits::args>;
 
         bool call_static = static_fn != nullptr;
 
@@ -213,6 +212,8 @@ struct FunctionInfo {
             constexpr bool is_multivalue =
                 is_specialization_of<std::tuple, ReturnType>;
 
+            constexpr size_t num_args =
+                std::tuple_size_v<typename Traits::args>;
             constexpr size_t num_results =
                 is_multivalue ? std::tuple_size_v<ReturnType> : 1;
 
