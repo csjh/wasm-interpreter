@@ -15,7 +15,7 @@ namespace mitey {
 
 Instance::Instance(std::shared_ptr<Module> module)
     : module(module), memory(nullptr), initial_stack(nullptr, 0),
-      frames(nullptr, 0), control_stack(nullptr, 0), if_jumps(module->if_jumps),
+      control_stack(nullptr, 0), if_jumps(module->if_jumps),
       block_ends(module->block_ends) {
 
     uint32_t buffer_size = 0;
@@ -35,7 +35,6 @@ Instance::Instance(std::shared_ptr<Module> module)
         };
 
     alloc(&initial_stack, STACK_SIZE / sizeof(WasmValue));
-    alloc(&frames, MAX_DEPTH);
     alloc(&control_stack, MAX_DEPTH);
     alloc(&functions, module->functions.size());
     alloc(&types, module->types.size());
@@ -393,7 +392,6 @@ FunctionInfo Instance::externalize_function(const FunctionInfo &fn) {
             } catch (const trap_error &e) {
                 initial_stack.clear();
                 control_stack.clear();
-                frames.clear();
                 throw;
             }
 
@@ -407,29 +405,22 @@ FunctionInfo Instance::externalize_function(const FunctionInfo &fn) {
 
 void Instance::entrypoint(const FunctionInfo &fn, tape<WasmValue> &stack) {
     auto backup_cs = control_stack;
-    auto backup_frames = frames;
 
     control_stack.set_start(control_stack.unsafe_ptr());
-    frames.set_start(frames.unsafe_ptr());
 
     try {
-        call_function_info(fn, nullptr, stack,
-                           [&] { interpret(fn.wasm_fn.start, stack); });
+        call_function_info(fn, nullptr, stack);
         control_stack = backup_cs;
-        frames = backup_frames;
     } catch (const trap_error &) {
         control_stack = backup_cs;
         control_stack.clear();
-        frames = backup_frames;
-        frames.clear();
         throw;
     }
 }
 
 inline void Instance::call_function_info(const FunctionInfo &fn,
                                          uint8_t *return_to,
-                                         tape<WasmValue> &stack,
-                                         std::function<void()> wasm_call) {
+                                         tape<WasmValue> &stack) {
     if (fn.wasm_fn) {
         // parameters are the first locals and they're taken from the top of
         // the stack
@@ -442,12 +433,18 @@ inline void Instance::call_function_info(const FunctionInfo &fn,
         std::memset((void *)nonparam_locals, 0,
                     (locals_end - nonparam_locals) * sizeof(WasmValue));
 
-        frames.push({locals_start, control_stack.get_start()});
+        StackFrame prev = frame;
+        auto cf_start = control_stack.get_start();
+
+        frame = {locals_start, control_stack.get_start()};
         control_stack.set_start(control_stack.unsafe_ptr());
         control_stack.push({locals_start, return_to,
                             static_cast<uint32_t>(fn.type.n_results)});
 
-        wasm_call();
+        interpret(fn.wasm_fn.start, stack);
+
+        control_stack.set_start(cf_start);
+        frame = prev;
     } else {
         stack -= fn.type.n_params;
         if (fn.static_fn != nullptr) {
@@ -488,12 +485,7 @@ void Instance::interpret(uint8_t *iter, tape<WasmValue> &stack) {
         }
         stack = target.stack + target.arity;
         iter = target.dest;
-        if (control_stack.empty()) {
-            control_stack.set_start(frames.pop().control_stack);
-            return frames.empty();
-        } else {
-            return false;
-        }
+        return control_stack.empty();
     };
 
 #define UNARY_OP(type, op)                                                     \
@@ -611,7 +603,7 @@ void Instance::interpret(uint8_t *iter, tape<WasmValue> &stack) {
         std::cerr << "reading instruction " << instructions[byte].c_str()
                   << " at " << iter - module->bytes.get() << std::endl;
         std::cerr << "stack contents: ";
-        for (WasmValue *p = frame().locals; p < stack.unsafe_ptr(); p++) {
+        for (WasmValue *p = frame.locals; p < stack.unsafe_ptr(); p++) {
             std::cerr << p->u64 << " ";
         }
         std::cerr << std::endl << std::endl;
@@ -659,8 +651,8 @@ void Instance::interpret(uint8_t *iter, tape<WasmValue> &stack) {
         case end:
             if (control_stack.size() == 1) {
                 // function end block
-                if (brk(0))
-                    return;
+                brk(0);
+                return;
             } else {
                 // we don't know if this is a block or loop
                 // so can't do brk(0)
@@ -707,8 +699,7 @@ void Instance::interpret(uint8_t *iter, tape<WasmValue> &stack) {
             break;
         case call: {
             FunctionInfo &fn = functions[read_leb128(iter)];
-            call_function_info(fn, iter, stack,
-                               [&] { iter = fn.wasm_fn.start; });
+            call_function_info(fn, iter, stack);
             break;
         }
         case call_indirect: {
@@ -762,13 +753,13 @@ void Instance::interpret(uint8_t *iter, tape<WasmValue> &stack) {
             break;
         }
         case localget:
-            stack.push(frame().locals[read_leb128(iter)]);
+            stack.push(frame.locals[read_leb128(iter)]);
             break;
         case localset:
-            frame().locals[read_leb128(iter)] = stack.pop();
+            frame.locals[read_leb128(iter)] = stack.pop();
             break;
         case localtee:
-            frame().locals[read_leb128(iter)] = stack[-1];
+            frame.locals[read_leb128(iter)] = stack[-1];
             break;
         case tableget:
             stack.push(tables[read_leb128(iter)]->get(stack.pop().u32));
@@ -1096,7 +1087,6 @@ void Instance::interpret(uint8_t *iter, tape<WasmValue> &stack) {
 
 Instance::~Instance() {
     assert(initial_stack.empty());
-    assert(frames.empty());
     assert(control_stack.empty());
 }
 

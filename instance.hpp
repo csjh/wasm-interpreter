@@ -223,7 +223,7 @@ class Instance {
     // internal stack
     tape<WasmValue> initial_stack;
     // function-specific frames
-    tape<StackFrame> frames;
+    StackFrame frame;
     // control stack
     tape<BrTarget> control_stack;
     // functions
@@ -246,8 +246,7 @@ class Instance {
     Exports exports;
 
     inline void call_function_info(const FunctionInfo &idx, uint8_t *return_to,
-                                   tape<WasmValue> &stack,
-                                   std::function<void()> wasm_call);
+                                   tape<WasmValue> &stack);
     void interpret(uint8_t *iter, tape<WasmValue> &);
 
     void entrypoint(const FunctionInfo &, tape<WasmValue> &);
@@ -256,8 +255,6 @@ class Instance {
         return interpret_const(iter);
     }
     WasmValue interpret_const(uint8_t *&iter);
-
-    StackFrame &frame() { return frames[-1]; }
 
     // makes a function run independently of the instance
     FunctionInfo externalize_function(const FunctionInfo &fn);
