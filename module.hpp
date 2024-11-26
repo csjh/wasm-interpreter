@@ -1,7 +1,11 @@
 #pragma once
 
 #include "spec.hpp"
+#include <functional>
+#include <memory>
+#include <optional>
 #include <span>
+#include <variant>
 #include <vector>
 
 #ifdef __SIZEOF_INT128__
@@ -206,42 +210,30 @@ struct FunctionInfo {
         bool call_static = static_fn != nullptr;
 
         return [this, call_static](auto... args) {
-            if constexpr (std::is_void_v<ReturnType>) {
-                WasmValue *stack = reinterpret_cast<WasmValue *>(
-                    alloca(sizeof(WasmValue) * num_args));
-                push_tuple_to_wasm(std::make_tuple(args...), stack,
-                                   std::make_index_sequence<sizeof...(args)>{});
+            constexpr bool is_multivalue =
+                is_specialization_of<std::tuple, ReturnType>;
 
-                if (call_static) {
-                    static_fn(stack);
-                } else {
-                    dyn_fn(stack);
-                }
-            } else if constexpr (is_specialization_of<std::tuple, ReturnType>) {
-                constexpr size_t num_results = std::tuple_size_v<ReturnType>;
+            constexpr size_t num_results =
+                is_multivalue ? std::tuple_size_v<ReturnType> : 1;
 
-                WasmValue *stack = reinterpret_cast<WasmValue *>(alloca(
-                    sizeof(WasmValue) * std::max(num_args, num_results)));
-                push_tuple_to_wasm(std::make_tuple(args...), stack,
-                                   std::make_index_sequence<sizeof...(args)>{});
-                if (call_static) {
-                    static_fn(stack);
-                } else {
-                    dyn_fn(stack);
-                }
+            void *buffer =
+                alloca(sizeof(WasmValue) * std::max(num_args, num_results));
+            WasmValue *stack = reinterpret_cast<WasmValue *>(buffer);
+
+            push_tuple_to_wasm(std::make_tuple(args...), stack,
+                               std::make_index_sequence<sizeof...(args)>{});
+
+            if (call_static) {
+                static_fn(stack);
+            } else {
+                dyn_fn(stack);
+            }
+
+            if constexpr (is_multivalue) {
                 return [&]<size_t... I>(std::index_sequence<I...>) {
                     return ReturnType{(stack[I])...};
                 }(std::make_index_sequence<num_results>{});
-            } else {
-                WasmValue *stack = reinterpret_cast<WasmValue *>(
-                    alloca(sizeof(WasmValue) * num_args));
-                push_tuple_to_wasm(std::make_tuple(args...), stack,
-                                   std::make_index_sequence<sizeof...(args)>{});
-                if (call_static) {
-                    static_fn(stack);
-                } else {
-                    dyn_fn(stack);
-                }
+            } else if constexpr (!std::is_void_v<ReturnType>) {
                 return stack[0];
             }
         };

@@ -439,7 +439,7 @@ inline void Instance::call_function_info(const FunctionInfo &fn,
         WasmValue *locals_end = stack.unsafe_ptr();
 
         WasmValue *nonparam_locals = locals_start + fn.type.n_params;
-        std::memset(nonparam_locals, 0,
+        std::memset((void *)nonparam_locals, 0,
                     (locals_end - nonparam_locals) * sizeof(WasmValue));
 
         frames.push({locals_start, control_stack.get_start()});

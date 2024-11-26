@@ -1,6 +1,7 @@
 #include "module.hpp"
 #include "instance.hpp"
 #include "spec.hpp"
+#include <limits>
 
 #ifdef WASM_DEBUG
 #include <iostream>
