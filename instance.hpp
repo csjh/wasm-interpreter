@@ -215,6 +215,7 @@ class Instance {
 
     std::shared_ptr<Module> module;
     std::weak_ptr<Instance> self;
+    // buffer for all the spans and tapes
     std::unique_ptr<uint8_t[]> buffer;
 
     // WebAssembly.Memory

@@ -480,8 +480,12 @@ void Instance::interpret(uint8_t *iter, tape<WasmValue> &stack) {
     auto brk = [&](uint32_t depth) {
         control_stack -= depth;
         BrTarget target = control_stack.pop();
-        std::memmove(target.stack, stack.unsafe_ptr() - target.arity,
-                     target.arity * sizeof(WasmValue));
+        stack -= target.arity;
+        std::memmove(target.stack, stack.unsafe_ptr(), sizeof(WasmValue));
+        if (target.arity > 1) [[unlikely]] {
+            std::memmove(target.stack, stack.unsafe_ptr(),
+                         target.arity * sizeof(WasmValue));
+        }
         stack = target.stack + target.arity;
         iter = target.dest;
         if (control_stack.empty()) {
