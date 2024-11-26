@@ -14,19 +14,43 @@
 namespace mitey {
 
 Instance::Instance(std::shared_ptr<Module> module)
-    : module(module), memory(nullptr),
-      initial_stack(static_cast<WasmValue *>(malloc(STACK_SIZE)),
-                    STACK_SIZE / sizeof(WasmValue)),
-      frames(static_cast<StackFrame *>(malloc(sizeof(StackFrame) * MAX_DEPTH)),
-             MAX_DEPTH),
-      control_stack(
-          static_cast<BrTarget *>(malloc(sizeof(BrTarget) * MAX_DEPTH)),
-          MAX_DEPTH),
-      functions(module->functions.size()), types(module->types.size()),
-      if_jumps(module->if_jumps), block_ends(module->block_ends),
-      globals(module->globals.size()), elements(module->elements.size()),
-      data_segments(module->data_segments.size()),
-      tables(module->tables.size()) {}
+    : module(module), memory(nullptr), initial_stack(nullptr, 0),
+      frames(nullptr, 0), control_stack(nullptr, 0), if_jumps(module->if_jumps),
+      block_ends(module->block_ends) {
+
+    uint32_t buffer_size = 0;
+    std::function<void(uint8_t *)> cb = [](uint8_t *) {};
+    auto alloc =
+        [&]<template <typename T, size_t...> class Container, typename T>(
+            Container<T> *member, uint32_t size) {
+            uint32_t offset = buffer_size;
+            buffer_size += sizeof(T) * size;
+            buffer_size += -buffer_size & 15;
+
+            auto prev_cb = cb;
+            cb = [=](uint8_t *raw_buffer) {
+                new (member) Container<T>((T *)(raw_buffer + offset), size);
+                prev_cb(raw_buffer);
+            };
+        };
+
+    alloc(&initial_stack, STACK_SIZE / sizeof(WasmValue));
+    alloc(&frames, MAX_DEPTH);
+    alloc(&control_stack, MAX_DEPTH);
+    alloc(&functions, module->functions.size());
+    alloc(&types, module->types.size());
+    alloc(&globals, module->globals.size());
+    alloc(&elements, module->elements.size());
+    alloc(&data_segments, module->data_segments.size());
+    alloc(&tables, module->tables.size());
+
+    // align to 2mb (in hopes of getting a huge page)
+    constexpr auto TWO_MB = 1ULL << 21;
+    buffer_size += -buffer_size & (TWO_MB - 1);
+
+    buffer = std::make_unique<uint8_t[]>(buffer_size);
+    cb(buffer.get());
+}
 
 void Instance::initialize(const Imports &imports) {
     auto get_import = [&](const ImportSpecifier &specifier) -> ExportValue {
@@ -1068,11 +1092,8 @@ void Instance::interpret(uint8_t *iter, tape<WasmValue> &stack) {
 
 Instance::~Instance() {
     assert(initial_stack.empty());
-    free(initial_stack.unsafe_ptr());
     assert(frames.empty());
-    free(frames.unsafe_ptr());
     assert(control_stack.empty());
-    free(control_stack.unsafe_ptr());
 }
 
 WasmMemory::WasmMemory() : memory(nullptr), current(0), maximum(0) {}

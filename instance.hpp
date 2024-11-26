@@ -202,19 +202,6 @@ template <typename T> class tape {
     T *end() { return ptr; }
 };
 
-template <typename T> class owned_span : protected std::unique_ptr<T[]> {
-    size_t _size;
-
-  public:
-    owned_span() : _size(0) {}
-    owned_span(size_t size)
-        : std::unique_ptr<T[]>(std::make_unique<T[]>(size)), _size(size) {}
-
-    T *data() { return this->get(); }
-    T &operator[](size_t idx) { return this->get()[idx]; }
-    size_t size() { return _size; }
-};
-
 class Instance {
     friend class Module;
 
@@ -228,6 +215,7 @@ class Instance {
 
     std::shared_ptr<Module> module;
     std::weak_ptr<Instance> self;
+    std::unique_ptr<uint8_t[]> buffer;
 
     // WebAssembly.Memory
     std::shared_ptr<WasmMemory> memory;
@@ -238,21 +226,21 @@ class Instance {
     // control stack
     tape<BrTarget> control_stack;
     // functions
-    owned_span<FunctionInfo> functions;
+    std::span<FunctionInfo> functions;
     // types
-    owned_span<RuntimeType> types;
+    std::span<RuntimeType> types;
     // locations of if else/end instructions
     std::unordered_map<uint8_t *, IfJump> if_jumps;
     // locations of block end instructions
     std::unordered_map<uint8_t *, uint8_t *> block_ends;
     // value of globals
-    owned_span<std::shared_ptr<WasmGlobal>> globals;
+    std::span<std::shared_ptr<WasmGlobal>> globals;
     // maps element indices to the element initializers
-    owned_span<ElementSegment> elements;
+    std::span<ElementSegment> elements;
     // data segments
-    owned_span<Segment> data_segments;
+    std::span<Segment> data_segments;
     // tables
-    owned_span<std::shared_ptr<WasmTable>> tables;
+    std::span<std::shared_ptr<WasmTable>> tables;
     // exports from export section
     Exports exports;
 
