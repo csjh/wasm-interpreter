@@ -430,40 +430,38 @@ static inline T safe_read_leb128(Iter &iter) {
     V(table_size, "table.size", 0x10)                                          \
     V(table_fill, "table.fill", 0x11)
 
-// clang-format off
 enum class Instruction {
-    #define V(name, str, byte) name = byte,
-    FOREACH_INSTRUCTION(V)
-    #undef V
+#define DEFINE_ENUM(name, str, byte) name = byte,
+    FOREACH_INSTRUCTION(DEFINE_ENUM)
+#undef DEFINE_ENUM
 };
 
 enum class FCInstruction {
-    #define V(name, str, byte) name = byte,
-    FOREACH_MULTIBYTE_INSTRUCTION(V)
-    #undef V
+#define DEFINE_ENUM(name, str, byte) name = byte,
+    FOREACH_MULTIBYTE_INSTRUCTION(DEFINE_ENUM)
+#undef DEFINE_ENUM
 };
 
 #ifdef WASM_DEBUG
 static std::string instructions[] = {
-    #define V(name, str, byte) [byte] = str,
-    FOREACH_INSTRUCTION(V)
-    #undef V
+#define DEFINE_NAME(name, str, byte) [byte] = str,
+    FOREACH_INSTRUCTION(DEFINE_NAME)
+#undef DEFINE_NAME
 };
 
 static std::string multibyte_instructions[] = {
-    #define V(name, str, byte) [byte] = str,
-    FOREACH_MULTIBYTE_INSTRUCTION(V)
-    #undef V
+#define DEFINE_NAME(name, str, byte) [byte] = str,
+    FOREACH_MULTIBYTE_INSTRUCTION(DEFINE_NAME)
+#undef DEFINE_NAME
 };
 #endif
-// clang-format on
 
 static inline bool is_instruction(uint8_t byte) {
-#define V(name, str, byte_)                                                    \
+#define DEFINE_EQ(name, str, byte_)                                            \
     if (byte == byte_)                                                         \
         return true;
-    FOREACH_INSTRUCTION(V)
-#undef V
+    FOREACH_INSTRUCTION(DEFINE_EQ)
+#undef DEFINE_EQ
     return false;
 }
 } // namespace mitey

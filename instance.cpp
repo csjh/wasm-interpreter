@@ -597,14 +597,14 @@ void Instance::interpret(uint8_t *iter, tape<WasmValue> &stack) {
 #define nextop() goto *gotos[*iter++]
 
     static void *gotos[] = {
-#define V(name, _, byte) [byte] = &&name,
-        FOREACH_INSTRUCTION(V)
-#undef V
+#define DEFINE_LABEL(name, _, byte) [byte] = &&name,
+        FOREACH_INSTRUCTION(DEFINE_LABEL)
+#undef DEFINE_LABEL
     };
     static void *fc_gotos[] = {
-#define V(name, _, byte) [byte] = &&name,
-        FOREACH_MULTIBYTE_INSTRUCTION(V)
-#undef V
+#define DEFINE_LABEL(name, _, byte) [byte] = &&name,
+        FOREACH_MULTIBYTE_INSTRUCTION(DEFINE_LABEL)
+#undef DEFINE_LABEL
     };
 
     nextop();
