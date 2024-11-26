@@ -5,6 +5,7 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <tuple>
 #include <variant>
 #include <vector>
 
@@ -214,8 +215,14 @@ struct FunctionInfo {
 
             constexpr size_t num_args =
                 std::tuple_size_v<typename Traits::args>;
-            constexpr size_t num_results =
-                is_multivalue ? std::tuple_size_v<ReturnType> : 1;
+            constexpr size_t num_results = [=] {
+                if constexpr (std::is_void_v<ReturnType>)
+                    return 0;
+                if constexpr (!is_multivalue)
+                    return 1;
+                else
+                    return std::tuple_size_v<ReturnType>;
+            }();
 
             void *buffer =
                 alloca(sizeof(WasmValue) * std::max(num_args, num_results));
