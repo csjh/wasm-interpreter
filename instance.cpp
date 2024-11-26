@@ -490,7 +490,7 @@ void Instance::interpret(uint8_t *iter, tape<WasmValue> &stack) {
 
 #define UNARY_OP(type, op)                                                     \
     stack[-1] = op(stack[-1].type);                                            \
-    break
+    nextop()
 #define TRUNC(type, op, lower, upper)                                          \
     {                                                                          \
         if (!std::isfinite(stack[-1].type)) {                                  \
@@ -507,18 +507,18 @@ void Instance::interpret(uint8_t *iter, tape<WasmValue> &stack) {
     }
 #define UNARY_FN(type, fn)                                                     \
     stack[-1] = fn(stack[-1].type);                                            \
-    break
+    nextop()
 #define BINARY_OP(type, op)                                                    \
     {                                                                          \
         stack--;                                                               \
         stack[-1] = stack[-1].type op stack[0].type;                           \
-        break;                                                                 \
+        nextop();                                                              \
     }
 #define BINARY_FN(type, fn)                                                    \
     {                                                                          \
         stack--;                                                               \
         stack[-1] = fn(stack[-1].type, stack[0].type);                         \
-        break;                                                                 \
+        nextop();                                                              \
     }
 #define IDIV(type)                                                             \
     {                                                                          \
@@ -532,7 +532,7 @@ void Instance::interpret(uint8_t *iter, tape<WasmValue> &stack) {
             trap("integer overflow");                                          \
         }                                                                      \
         stack[-1] = stack[-1].type / stack[0].type;                            \
-        break;                                                                 \
+        nextop();                                                              \
     }
 #define IREM(type)                                                             \
     {                                                                          \
@@ -547,7 +547,7 @@ void Instance::interpret(uint8_t *iter, tape<WasmValue> &stack) {
         } else {                                                               \
             stack[-1] = stack[-1].type % stack[0].type;                        \
         }                                                                      \
-        break;                                                                 \
+        nextop();                                                              \
     }
 #define MINMAX(type, fn)                                                       \
     {                                                                          \
@@ -557,13 +557,13 @@ void Instance::interpret(uint8_t *iter, tape<WasmValue> &stack) {
         } else {                                                               \
             stack[-1].type = fn(stack[-1].type, stack[0].type);                \
         }                                                                      \
-        break;                                                                 \
+        nextop();                                                              \
     }
 #define SHIFT(type, op)                                                        \
     {                                                                          \
         stack--;                                                               \
         stack[-1] = stack[-1].type op(stack[0].type % (sizeof(type) * 8));     \
-        break;                                                                 \
+        nextop();                                                              \
     }
 #define TRUNC_SAT(from, to)                                                    \
     {                                                                          \
@@ -574,7 +574,7 @@ void Instance::interpret(uint8_t *iter, tape<WasmValue> &stack) {
         } else {                                                               \
             stack[-1].to = static_cast<to>(stack[-1].from);                    \
         }                                                                      \
-        break;                                                                 \
+        nextop();                                                              \
     }
 
 #define LOAD(type, memtype)                                                    \
@@ -582,7 +582,7 @@ void Instance::interpret(uint8_t *iter, tape<WasmValue> &stack) {
         uint32_t align = 1 << *iter++;                                         \
         uint32_t offset = read_leb128(iter);                                   \
         stack[-1].type = memory->load<memtype>(stack[-1].u32, offset, align);  \
-        break;                                                                 \
+        nextop();                                                              \
     }
 
 #define STORE(type, stacktype)                                                 \
@@ -592,490 +592,473 @@ void Instance::interpret(uint8_t *iter, tape<WasmValue> &stack) {
         uint32_t offset = read_leb128(iter);                                   \
         memory->store<type>(stack[0].u32, offset, align,                       \
                             static_cast<type>(stack[1].stacktype));            \
-        break;                                                                 \
+        nextop();                                                              \
+    }
+#define nextop() goto *gotos[*iter++]
+
+    static void *gotos[] = {
+#define V(name, _, byte) [byte] = &&name,
+        FOREACH_INSTRUCTION(V)
+#undef V
+    };
+    static void *fc_gotos[] = {
+#define V(name, _, byte) [byte] = &&name,
+        FOREACH_MULTIBYTE_INSTRUCTION(V)
+#undef V
+    };
+
+    nextop();
+
+unreachable:
+    trap("unreachable");
+    nextop();
+nop:
+    nextop();
+block: {
+    auto sn = RuntimeType::read_blocktype(types, iter);
+    control_stack.push({stack.unsafe_ptr() - sn.n_params, block_ends[iter],
+                        static_cast<uint32_t>(sn.n_results)});
+    nextop();
+}
+loop: {
+    // reading blocktype each time maybe not efficient?
+    uint8_t *loop_start = iter - 1;
+    auto sn = RuntimeType::read_blocktype(types, iter);
+    control_stack.push(
+        // iter - 1 so br goes back to the loop
+        {stack.unsafe_ptr() - sn.n_params, loop_start,
+         static_cast<uint32_t>(sn.n_params)});
+    nextop();
+}
+if_: {
+    auto sn = RuntimeType::read_blocktype(types, iter);
+    uint32_t cond = stack.pop().u32;
+    control_stack.push({stack.unsafe_ptr() - sn.n_params, if_jumps[iter].end,
+                        static_cast<uint32_t>(sn.n_results)});
+    if (!cond)
+        iter = if_jumps[iter].else_;
+    nextop();
+}
+else_:
+    // if the else block is reached, the if block is done
+    // might be faster to have another dictionary for else block ->
+    // end so this can just be iter = end_block todo: look at what
+    // compiler optimizes to
+    brk(0);
+    nextop();
+end:
+    if (control_stack.size() == 1) {
+        // function end block
+        brk(0);
+        return;
+    } else {
+        // we don't know if this is a block or loop
+        // so can't do brk(0)
+        // BUT validation has confirmed that the result is
+        // the only thing left on the stack, so we can just
+        // pop the control stack (since the result is already in
+        // place)
+        control_stack.pop();
+    }
+    nextop();
+br: {
+    if (brk(read_leb128(iter)))
+        return;
+    nextop();
+}
+br_if: {
+    uint32_t depth = read_leb128(iter);
+    if (stack.pop().u32)
+        if (brk(depth))
+            return;
+    nextop();
+}
+br_table: {
+    uint32_t v = stack.pop().u32;
+    uint32_t n_targets = read_leb128(iter);
+    uint32_t target, depth = std::numeric_limits<uint32_t>::max();
+
+    // <= because there's an extra for the default target
+    for (uint32_t i = 0; i <= n_targets; ++i) {
+        target = read_leb128(iter);
+        if (i == v)
+            depth = target;
+    }
+    // use default
+    if (depth == std::numeric_limits<uint32_t>::max())
+        depth = target;
+    if (brk(depth))
+        return;
+    nextop();
+}
+return_:
+    if (brk(control_stack.size() - 1))
+        return;
+    nextop();
+call: {
+    FunctionInfo &fn = functions[read_leb128(iter)];
+    call_function_info(fn, iter, stack);
+    nextop();
+}
+call_indirect: {
+    uint32_t type_idx = read_leb128(iter);
+    uint32_t table_idx = read_leb128(iter);
+    uint32_t elem_idx = stack.pop().u32;
+
+    if (elem_idx >= tables[table_idx]->size()) {
+        trap("undefined element");
+    }
+    Funcref funcref = tables[table_idx]->get(elem_idx);
+    if (!funcref) {
+        trap("uninitialized element");
+    }
+    if (funcref->type != types[type_idx]) {
+        trap("indirect call type mismatch");
     }
 
-    using enum Instruction;
-
-    while (1) {
-        uint8_t byte = *iter++;
-#ifdef WASM_DEBUG
-        std::cerr << "reading instruction " << instructions[byte].c_str()
-                  << " at " << iter - module->bytes.get() << std::endl;
-        std::cerr << "stack contents: ";
-        for (WasmValue *p = frame.locals; p < stack.unsafe_ptr(); p++) {
-            std::cerr << p->u64 << " ";
+    // this is so bad, there's so much repetition
+    // entrypooint and call_function_info need to be revamped
+    auto &fn = *funcref;
+    if (fn.wasm_fn) {
+        fn.wasm_fn.instance->entrypoint(fn, stack);
+    } else {
+        stack -= fn.type.n_params;
+        if (fn.static_fn != nullptr) {
+            fn.static_fn(stack.unsafe_ptr());
+        } else {
+            fn.dyn_fn(stack.unsafe_ptr());
         }
-        std::cerr << std::endl << std::endl;
-#endif
-        switch (static_cast<Instruction>(byte)) {
-        case unreachable:
-            trap("unreachable");
-            break;
-        case nop:
-            break;
-        case block: {
-            auto sn = RuntimeType::read_blocktype(types, iter);
-            control_stack.push({stack.unsafe_ptr() - sn.n_params,
-                                block_ends[iter],
-                                static_cast<uint32_t>(sn.n_results)});
-            break;
-        }
-        case loop: {
-            // reading blocktype each time maybe not efficient?
-            uint8_t *loop_start = iter - 1;
-            auto sn = RuntimeType::read_blocktype(types, iter);
-            control_stack.push(
-                // iter - 1 so br goes back to the loop
-                {stack.unsafe_ptr() - sn.n_params, loop_start,
-                 static_cast<uint32_t>(sn.n_params)});
-            break;
-        }
-        case if_: {
-            auto sn = RuntimeType::read_blocktype(types, iter);
-            uint32_t cond = stack.pop().u32;
-            control_stack.push({stack.unsafe_ptr() - sn.n_params,
-                                if_jumps[iter].end,
-                                static_cast<uint32_t>(sn.n_results)});
-            if (!cond)
-                iter = if_jumps[iter].else_;
-            break;
-        }
-        case else_:
-            // if the else block is reached, the if block is done
-            // might be faster to have another dictionary for else block ->
-            // end so this can just be iter = end_block todo: look at what
-            // compiler optimizes to
-            brk(0);
-            break;
-        case end:
-            if (control_stack.size() == 1) {
-                // function end block
-                brk(0);
-                return;
-            } else {
-                // we don't know if this is a block or loop
-                // so can't do brk(0)
-                // BUT validation has confirmed that the result is
-                // the only thing left on the stack, so we can just
-                // pop the control stack (since the result is already in
-                // place)
-                control_stack.pop();
-            }
-            break;
-        case br: {
-            if (brk(read_leb128(iter)))
-                return;
-            break;
-        }
-        case br_if: {
-            uint32_t depth = read_leb128(iter);
-            if (stack.pop().u32)
-                if (brk(depth))
-                    return;
-            break;
-        }
-        case br_table: {
-            uint32_t v = stack.pop().u32;
-            uint32_t n_targets = read_leb128(iter);
-            uint32_t target, depth = std::numeric_limits<uint32_t>::max();
-
-            // <= because there's an extra for the default target
-            for (uint32_t i = 0; i <= n_targets; ++i) {
-                target = read_leb128(iter);
-                if (i == v)
-                    depth = target;
-            }
-            // use default
-            if (depth == std::numeric_limits<uint32_t>::max())
-                depth = target;
-            if (brk(depth))
-                return;
-            break;
-        }
-        case return_:
-            if (brk(control_stack.size() - 1))
-                return;
-            break;
-        case call: {
-            FunctionInfo &fn = functions[read_leb128(iter)];
-            call_function_info(fn, iter, stack);
-            break;
-        }
-        case call_indirect: {
-            uint32_t type_idx = read_leb128(iter);
-            uint32_t table_idx = read_leb128(iter);
-            uint32_t elem_idx = stack.pop().u32;
-
-            if (elem_idx >= tables[table_idx]->size()) {
-                trap("undefined element");
-            }
-            Funcref funcref = tables[table_idx]->get(elem_idx);
-            if (!funcref) {
-                trap("uninitialized element");
-            }
-            if (funcref->type != types[type_idx]) {
-                trap("indirect call type mismatch");
-            }
-
-            // this is so bad, there's so much repetition
-            // entrypooint and call_function_info need to be revamped
-            auto &fn = *funcref;
-            if (fn.wasm_fn) {
-                fn.wasm_fn.instance->entrypoint(fn, stack);
-            } else {
-                stack -= fn.type.n_params;
-                if (fn.static_fn != nullptr) {
-                    fn.static_fn(stack.unsafe_ptr());
-                } else {
-                    fn.dyn_fn(stack.unsafe_ptr());
-                }
-                stack += fn.type.n_results;
-            }
-            break;
-        }
-        case drop:
-            stack.pop();
-            break;
-        case select: {
-            stack -= 2;
-            if (!stack[1].i32)
-                stack[-1] = stack[0];
-            break;
-        }
-        case select_t: {
-            /* uint32_t n_results = */ read_leb128(iter);
-            // skip result types
-            iter++;
-            stack -= 2;
-            if (!stack[1].i32)
-                stack[-1] = stack[0];
-            break;
-        }
-        case localget:
-            stack.push(frame.locals[read_leb128(iter)]);
-            break;
-        case localset:
-            frame.locals[read_leb128(iter)] = stack.pop();
-            break;
-        case localtee:
-            frame.locals[read_leb128(iter)] = stack[-1];
-            break;
-        case tableget:
-            stack.push(tables[read_leb128(iter)]->get(stack.pop().u32));
-            break;
-        case tableset:
-            stack -= 2;
-            tables[read_leb128(iter)]->set(stack[0].u32, stack[1]);
-            break;
-        case globalget:
-            stack.push(globals[read_leb128(iter)]->value);
-            break;
-        case globalset:
-            globals[read_leb128(iter)]->value = stack.pop();
-            break;
-        case memorysize: {
-            /* uint32_t mem_idx = */ read_leb128(iter);
-            stack.push(memory->size());
-            break;
-        }
-        case memorygrow: {
-            /* uint32_t mem_idx = */ read_leb128(iter);
-            stack[-1].u32 = memory->grow(stack[-1].u32);
-            break;
-        }
-        case i32const:
-            stack.push((int32_t)read_sleb128<32>(iter));
-            break;
-        case i64const:
-            stack.push((int64_t)read_sleb128<64>(iter));
-            break;
-        case f32const: {
-            float x;
-            std::memcpy(&x, iter, sizeof(float));
-            stack.push(x);
-            iter += sizeof(float);
-            break;
-        }
-        case f64const: {
-            double x;
-            std::memcpy(&x, iter, sizeof(double));
-            stack.push(x);
-            iter += sizeof(double);
-            break;
-        }
-            // clang-format off
-        case i32load:      LOAD(u32, uint32_t);
-        case i64load:      LOAD(u64, uint64_t);
-        case f32load:      LOAD(f32, float);
-        case f64load:      LOAD(f64, double);
-        case i32load8_s:   LOAD(i32, int8_t);
-        case i32load8_u:   LOAD(u32, uint8_t);
-        case i32load16_s:  LOAD(i32, int16_t);
-        case i32load16_u:  LOAD(u32, uint16_t);
-        case i64load8_s:   LOAD(i64, int8_t);
-        case i64load8_u:   LOAD(u64, uint8_t);
-        case i64load16_s:  LOAD(i64, int16_t);
-        case i64load16_u:  LOAD(u64, uint16_t);
-        case i64load32_s:  LOAD(i64, int32_t);
-        case i64load32_u:  LOAD(u64, uint32_t);
-        case i32store:     STORE(uint32_t, u32);
-        case i64store:     STORE(uint64_t, u64);
-        case f32store:     STORE(float, f32);
-        case f64store:     STORE(double, f64);
-        case i32store8:    STORE(uint8_t, u32);
-        case i32store16:   STORE(uint16_t, u32);
-        case i64store8:    STORE(uint8_t, u64);
-        case i64store16:   STORE(uint16_t, u64);
-        case i64store32:   STORE(uint32_t, u64);
-        case i32eqz:       UNARY_OP (i32, 0 ==);
-        case i64eqz:       UNARY_OP (i64, 0 ==);
-        case i32eq:        BINARY_OP(i32, ==);
-        case i64eq:        BINARY_OP(i64, ==);
-        case i32ne:        BINARY_OP(i32, !=);
-        case i64ne:        BINARY_OP(i64, !=);
-        case i32lt_s:      BINARY_OP(i32, < );
-        case i64lt_s:      BINARY_OP(i64, < );
-        case i32lt_u:      BINARY_OP(u32, < );
-        case i64lt_u:      BINARY_OP(u64, < );
-        case i32gt_s:      BINARY_OP(i32, > );
-        case i64gt_s:      BINARY_OP(i64, > );
-        case i32gt_u:      BINARY_OP(u32, > );
-        case i64gt_u:      BINARY_OP(u64, > );
-        case i32le_s:      BINARY_OP(i32, <=);
-        case i64le_s:      BINARY_OP(i64, <=);
-        case i32le_u:      BINARY_OP(u32, <=);
-        case i64le_u:      BINARY_OP(u64, <=);
-        case i32ge_s:      BINARY_OP(i32, >=);
-        case i64ge_s:      BINARY_OP(i64, >=);
-        case i32ge_u:      BINARY_OP(u32, >=);
-        case i64ge_u:      BINARY_OP(u64, >=);
-        case f32eq:        BINARY_OP(f32, ==);
-        case f64eq:        BINARY_OP(f64, ==);
-        case f32ne:        BINARY_OP(f32, !=);
-        case f64ne:        BINARY_OP(f64, !=);
-        case f32lt:        BINARY_OP(f32, < );
-        case f64lt:        BINARY_OP(f64, < );
-        case f32gt:        BINARY_OP(f32, > );
-        case f64gt:        BINARY_OP(f64, > );
-        case f32le:        BINARY_OP(f32, <=);
-        case f64le:        BINARY_OP(f64, <=);
-        case f32ge:        BINARY_OP(f32, >=);
-        case f64ge:        BINARY_OP(f64, >=);
-        case i32clz:       UNARY_FN (u32, std::countl_zero);
-        case i64clz:       UNARY_FN (u64, (uint64_t)std::countl_zero);
-        case i32ctz:       UNARY_FN (u32, std::countr_zero);
-        case i64ctz:       UNARY_FN (u64, (uint64_t)std::countr_zero);
-        case i32popcnt:    UNARY_FN (u32, std::popcount);
-        case i64popcnt:    UNARY_FN (u64, (uint64_t)std::popcount);
-        case i32add:       BINARY_OP(u32, + );
-        case i64add:       BINARY_OP(u64, + );
-        case i32sub:       BINARY_OP(u32, - );
-        case i64sub:       BINARY_OP(u64, - );
-        case i32mul:       BINARY_OP(u32, * );
-        case i64mul:       BINARY_OP(u64, * );
-        case i32div_s:     IDIV     (i32);
-        case i64div_s:     IDIV     (i64);
-        case i32div_u:     IDIV     (u32);
-        case i64div_u:     IDIV     (u64);
-        case i32rem_s:     IREM     (i32);
-        case i64rem_s:     IREM     (i64);
-        case i32rem_u:     IREM     (u32);
-        case i64rem_u:     IREM     (u64);
-        case i32and:       BINARY_OP(u32, & );
-        case i64and:       BINARY_OP(u64, & );
-        case i32or:        BINARY_OP(u32, | );
-        case i64or:        BINARY_OP(u64, | );
-        case i32xor:       BINARY_OP(u32, ^ );
-        case i64xor:       BINARY_OP(u64, ^ );
-        case i32shl:       SHIFT    (u32, <<);
-        case i64shl:       SHIFT    (u64, <<);
-        case i32shr_s:     SHIFT    (i32, >>);
-        case i64shr_s:     SHIFT    (i64, >>);
-        case i32shr_u:     SHIFT    (u32, >>);
-        case i64shr_u:     SHIFT    (u64, >>);
-        case i32rotl:      BINARY_FN(u32, std::rotl);
-        case i64rotl:      BINARY_FN(u64, std::rotl);
-        case i32rotr:      BINARY_FN(u32, std::rotr);
-        case i64rotr:      BINARY_FN(u64, std::rotr);
-        case f32abs:       UNARY_FN (f32, std::abs);
-        case f64abs:       UNARY_FN (f64, std::abs);
-        case f32neg:       UNARY_OP (f32, -);
-        case f64neg:       UNARY_OP (f64, -);
-        case f32ceil:      UNARY_FN (f32, std::ceil);
-        case f64ceil:      UNARY_FN (f64, std::ceil);
-        case f32floor:     UNARY_FN (f32, std::floor);
-        case f64floor:     UNARY_FN (f64, std::floor);
-        case f32trunc:     UNARY_FN (f32, std::trunc);
-        case f64trunc:     UNARY_FN (f64, std::trunc);
-        case f32nearest:   UNARY_FN (f32, std::nearbyint);
-        case f64nearest:   UNARY_FN (f64, std::nearbyint);
-        case f32sqrt:      UNARY_FN (f32, std::sqrt);
-        case f64sqrt:      UNARY_FN (f64, std::sqrt);
-        case f32add:       BINARY_OP(f32, +);
-        case f64add:       BINARY_OP(f64, +);
-        case f32sub:       BINARY_OP(f32, -);
-        case f64sub:       BINARY_OP(f64, -);
-        case f32mul:       BINARY_OP(f32, *);
-        case f64mul:       BINARY_OP(f64, *);
-        case f32div:       BINARY_OP(f32, /);
-        case f64div:       BINARY_OP(f64, /);
-        case f32min:       MINMAX   (f32, std::min);
-        case f64min:       MINMAX   (f64, std::min);
-        case f32max:       MINMAX   (f32, std::max);
-        case f64max:       MINMAX   (f64, std::max);
-        case f32copysign:  BINARY_FN(f32, std::copysign);
-        case f64copysign:  BINARY_FN(f64, std::copysign);
-        case i32wrap_i64:      UNARY_OP(i64, (int32_t));
-        case i64extend_i32_s:  UNARY_OP(i32, (int64_t));
-        case i64extend_i32_u:  UNARY_OP(u32, (uint64_t));
-        case i32trunc_f32_s:   TRUNC   (f32, (int32_t),           -2147483777.,           2147483648.);
-        case i64trunc_f32_s:   TRUNC   (f32, (int64_t),  -9223373136366404000.,  9223372036854776000.);
-        case i32trunc_f32_u:   TRUNC   (f32, (uint32_t),                   -1.,           4294967296.);
-        case i64trunc_f32_u:   TRUNC   (f32, (uint64_t),                   -1., 18446744073709552000.);
-        case i32trunc_f64_s:   TRUNC   (f64, (int32_t),           -2147483649.,           2147483648.);
-        case i64trunc_f64_s:   TRUNC   (f64, (int64_t),  -9223372036854777856.,  9223372036854776000.);
-        case i32trunc_f64_u:   TRUNC   (f64, (uint32_t),                   -1.,           4294967296.);
-        case i64trunc_f64_u:   TRUNC   (f64, (uint64_t),                   -1., 18446744073709552000.);
-        case f32convert_i32_s: UNARY_OP(i32, (float));
-        case f64convert_i32_s: UNARY_OP(i32, (double));
-        case f32convert_i32_u: UNARY_OP(u32, (float));
-        case f64convert_i32_u: UNARY_OP(u32, (double));
-        case f32convert_i64_s: UNARY_OP(i64, (float));
-        case f64convert_i64_s: UNARY_OP(i64, (double));
-        case f32convert_i64_u: UNARY_OP(u64, (float));
-        case f64convert_i64_u: UNARY_OP(u64, (double));
-        case f32demote_f64:    UNARY_OP(f64, (float));
-        case f64promote_f32:   UNARY_OP(f32, (double));
-        // without type assertions these are noops
-        case i32reinterpret_f32: break;
-        case f32reinterpret_i32: break;
-        case i64reinterpret_f64: break;
-        case f64reinterpret_i64: break;
-        case i32extend8_s:  UNARY_OP(i32, (int32_t)(int8_t));
-        case i32extend16_s: UNARY_OP(i32, (int32_t)(int16_t));
-        case i64extend8_s:  UNARY_OP(i64, (int64_t)(int8_t));
-        case i64extend16_s: UNARY_OP(i64, (int64_t)(int16_t));
-        case i64extend32_s: UNARY_OP(i64, (int64_t)(int32_t));
-        case ref_null: {
-            read_leb128(iter);
-            stack.push((void*)nullptr);
-            break;
-        }
-        case ref_is_null: {
-            // note that funcref is also a full 0 value when null
-            stack[-1].i32 = stack[-1].externref == nullptr;
-            break;
-        }
-        case ref_func: {
-            uint32_t func_idx = read_leb128(iter);
-            stack.push(&functions[func_idx]);
-            break;
-        }
-        // bitwise comparison applies to both
-        case ref_eq: BINARY_OP(externref, ==);
-        case multibyte: {
-            uint8_t byte = read_leb128(iter);
-#if WASM_DEBUG
-            std::cerr << "reading multibyte instruction " << multibyte_instructions[byte].c_str()
-                      << " at " << iter - module->bytes.get() << std::endl;
-#endif
-            using enum FCInstruction;
-
-            switch (static_cast<FCInstruction>(byte)) {
-                case i32_trunc_sat_f32_s: TRUNC_SAT(f32, i32);
-                case i32_trunc_sat_f32_u: TRUNC_SAT(f32, u32);
-                case i32_trunc_sat_f64_s: TRUNC_SAT(f64, i32);
-                case i32_trunc_sat_f64_u: TRUNC_SAT(f64, u32);
-                case i64_trunc_sat_f32_s: TRUNC_SAT(f32, i64);
-                case i64_trunc_sat_f32_u: TRUNC_SAT(f32, u64);
-                case i64_trunc_sat_f64_s: TRUNC_SAT(f64, i64);
-                case i64_trunc_sat_f64_u: TRUNC_SAT(f64, u64);
-                case memory_init: {
-                    uint32_t seg_idx = read_leb128(iter);
-                    iter++;
-                    uint32_t size = stack.pop().u32;
-                    uint32_t src = stack.pop().u32;
-                    uint32_t dest = stack.pop().u32;
-                    memory->copy_into(dest, src, data_segments[seg_idx], size);
-                    break;
-                }
-                case data_drop: {
-                    uint32_t seg_idx = read_leb128(iter);
-                    data_segments[seg_idx].data = {};
-                    break;
-                }
-                case memory_copy: {
-                    /* uint32_t mem_idx = */ read_leb128(iter);
-                    /* uint32_t mem_idx = */ read_leb128(iter);
-                    uint32_t size = stack.pop().u32;
-                    uint32_t src = stack.pop().u32;
-                    uint32_t dst = stack.pop().u32;
-                    memory->memcpy(dst, src, size);
-                    break;
-                }
-                case memory_fill: {
-                    /* uint32_t mem_idx = */ read_leb128(iter);
-                    uint32_t size = stack.pop().u32;
-                    uint32_t value = stack.pop().u32;
-                    uint32_t ptr = stack.pop().u32;
-                    memory->memset(ptr, value, size);
-                    break;
-                }
-                case table_init: {
-                    uint32_t seg_idx = read_leb128(iter);
-                    uint32_t table_idx = read_leb128(iter);
-                    uint32_t size = stack.pop().u32;
-                    uint32_t src = stack.pop().u32;
-                    uint32_t dest = stack.pop().u32;
-
-                    auto& table = tables[table_idx];
-                    auto& element = elements[seg_idx];
-                    table->copy_into(dest, src, element, size);
-                    break;
-                }
-                case elem_drop: {
-                    uint32_t seg_idx = read_leb128(iter);
-                    elements[seg_idx].elements.clear();
-                    break;
-                }
-                case table_copy: {
-                    uint32_t dst_table = read_leb128(iter);
-                    uint32_t src_table = read_leb128(iter);
-                    uint32_t size = stack.pop().u32;
-                    uint32_t src = stack.pop().u32;
-                    uint32_t dst = stack.pop().u32;
-                    tables[src_table]->memcpy(*tables[dst_table], dst, src, size);
-                    break;
-                }
-                case table_grow: {
-                    uint32_t table_idx = read_leb128(iter);
-                    uint32_t delta = stack.pop().u32;
-                    WasmValue init = stack.pop();
-                    stack.push(tables[table_idx]->grow(delta, init));
-                    break;
-                }
-                case table_size: {
-                    uint32_t table_idx = read_leb128(iter);
-                    stack.push(tables[table_idx]->size());
-                    break;
-                }
-                case table_fill: {
-                    uint32_t table_idx = read_leb128(iter);
-                    uint32_t size = stack.pop().u32;
-                    WasmValue value = stack.pop();
-                    uint32_t ptr = stack.pop().u32;
-                    tables[table_idx]->memset(ptr, value, size);
-                    break;
-                }
-                default: __builtin_unreachable();
-            }
-            break;
-        }
-        default: __builtin_unreachable();
-            // clang-format on
-        };
+        stack += fn.type.n_results;
     }
+    nextop();
+}
+drop:
+    stack.pop();
+    nextop();
+select: {
+    stack -= 2;
+    if (!stack[1].i32)
+        stack[-1] = stack[0];
+    nextop();
+}
+select_t: {
+    /* uint32_t n_results = */ read_leb128(iter);
+    // skip result types
+    iter++;
+    stack -= 2;
+    if (!stack[1].i32)
+        stack[-1] = stack[0];
+    nextop();
+}
+localget:
+    stack.push(frame.locals[read_leb128(iter)]);
+    nextop();
+localset:
+    frame.locals[read_leb128(iter)] = stack.pop();
+    nextop();
+localtee:
+    frame.locals[read_leb128(iter)] = stack[-1];
+    nextop();
+tableget:
+    stack.push(tables[read_leb128(iter)]->get(stack.pop().u32));
+    nextop();
+tableset:
+    stack -= 2;
+    tables[read_leb128(iter)]->set(stack[0].u32, stack[1]);
+    nextop();
+globalget:
+    stack.push(globals[read_leb128(iter)]->value);
+    nextop();
+globalset:
+    globals[read_leb128(iter)]->value = stack.pop();
+    nextop();
+memorysize: {
+    /* uint32_t mem_idx = */ read_leb128(iter);
+    stack.push(memory->size());
+    nextop();
+}
+memorygrow: {
+    /* uint32_t mem_idx = */ read_leb128(iter);
+    stack[-1].u32 = memory->grow(stack[-1].u32);
+    nextop();
+}
+i32const:
+    stack.push((int32_t)read_sleb128<32>(iter));
+    nextop();
+i64const:
+    stack.push((int64_t)read_sleb128<64>(iter));
+    nextop();
+f32const: {
+    float x;
+    std::memcpy(&x, iter, sizeof(float));
+    stack.push(x);
+    iter += sizeof(float);
+    nextop();
+}
+f64const: {
+    double x;
+    std::memcpy(&x, iter, sizeof(double));
+    stack.push(x);
+    iter += sizeof(double);
+    nextop();
+}
+    // clang-format off
+i32load:      LOAD(u32, uint32_t);
+i64load:      LOAD(u64, uint64_t);
+f32load:      LOAD(f32, float);
+f64load:      LOAD(f64, double);
+i32load8_s:   LOAD(i32, int8_t);
+i32load8_u:   LOAD(u32, uint8_t);
+i32load16_s:  LOAD(i32, int16_t);
+i32load16_u:  LOAD(u32, uint16_t);
+i64load8_s:   LOAD(i64, int8_t);
+i64load8_u:   LOAD(u64, uint8_t);
+i64load16_s:  LOAD(i64, int16_t);
+i64load16_u:  LOAD(u64, uint16_t);
+i64load32_s:  LOAD(i64, int32_t);
+i64load32_u:  LOAD(u64, uint32_t);
+i32store:     STORE(uint32_t, u32);
+i64store:     STORE(uint64_t, u64);
+f32store:     STORE(float, f32);
+f64store:     STORE(double, f64);
+i32store8:    STORE(uint8_t, u32);
+i32store16:   STORE(uint16_t, u32);
+i64store8:    STORE(uint8_t, u64);
+i64store16:   STORE(uint16_t, u64);
+i64store32:   STORE(uint32_t, u64);
+i32eqz:       UNARY_OP (i32, 0 ==);
+i64eqz:       UNARY_OP (i64, 0 ==);
+i32eq:        BINARY_OP(i32, ==);
+i64eq:        BINARY_OP(i64, ==);
+i32ne:        BINARY_OP(i32, !=);
+i64ne:        BINARY_OP(i64, !=);
+i32lt_s:      BINARY_OP(i32, < );
+i64lt_s:      BINARY_OP(i64, < );
+i32lt_u:      BINARY_OP(u32, < );
+i64lt_u:      BINARY_OP(u64, < );
+i32gt_s:      BINARY_OP(i32, > );
+i64gt_s:      BINARY_OP(i64, > );
+i32gt_u:      BINARY_OP(u32, > );
+i64gt_u:      BINARY_OP(u64, > );
+i32le_s:      BINARY_OP(i32, <=);
+i64le_s:      BINARY_OP(i64, <=);
+i32le_u:      BINARY_OP(u32, <=);
+i64le_u:      BINARY_OP(u64, <=);
+i32ge_s:      BINARY_OP(i32, >=);
+i64ge_s:      BINARY_OP(i64, >=);
+i32ge_u:      BINARY_OP(u32, >=);
+i64ge_u:      BINARY_OP(u64, >=);
+f32eq:        BINARY_OP(f32, ==);
+f64eq:        BINARY_OP(f64, ==);
+f32ne:        BINARY_OP(f32, !=);
+f64ne:        BINARY_OP(f64, !=);
+f32lt:        BINARY_OP(f32, < );
+f64lt:        BINARY_OP(f64, < );
+f32gt:        BINARY_OP(f32, > );
+f64gt:        BINARY_OP(f64, > );
+f32le:        BINARY_OP(f32, <=);
+f64le:        BINARY_OP(f64, <=);
+f32ge:        BINARY_OP(f32, >=);
+f64ge:        BINARY_OP(f64, >=);
+i32clz:       UNARY_FN (u32, std::countl_zero);
+i64clz:       UNARY_FN (u64, (uint64_t)std::countl_zero);
+i32ctz:       UNARY_FN (u32, std::countr_zero);
+i64ctz:       UNARY_FN (u64, (uint64_t)std::countr_zero);
+i32popcnt:    UNARY_FN (u32, std::popcount);
+i64popcnt:    UNARY_FN (u64, (uint64_t)std::popcount);
+i32add:       BINARY_OP(u32, + );
+i64add:       BINARY_OP(u64, + );
+i32sub:       BINARY_OP(u32, - );
+i64sub:       BINARY_OP(u64, - );
+i32mul:       BINARY_OP(u32, * );
+i64mul:       BINARY_OP(u64, * );
+i32div_s:     IDIV     (i32);
+i64div_s:     IDIV     (i64);
+i32div_u:     IDIV     (u32);
+i64div_u:     IDIV     (u64);
+i32rem_s:     IREM     (i32);
+i64rem_s:     IREM     (i64);
+i32rem_u:     IREM     (u32);
+i64rem_u:     IREM     (u64);
+i32and:       BINARY_OP(u32, & );
+i64and:       BINARY_OP(u64, & );
+i32or:        BINARY_OP(u32, | );
+i64or:        BINARY_OP(u64, | );
+i32xor:       BINARY_OP(u32, ^ );
+i64xor:       BINARY_OP(u64, ^ );
+i32shl:       SHIFT    (u32, <<);
+i64shl:       SHIFT    (u64, <<);
+i32shr_s:     SHIFT    (i32, >>);
+i64shr_s:     SHIFT    (i64, >>);
+i32shr_u:     SHIFT    (u32, >>);
+i64shr_u:     SHIFT    (u64, >>);
+i32rotl:      BINARY_FN(u32, std::rotl);
+i64rotl:      BINARY_FN(u64, std::rotl);
+i32rotr:      BINARY_FN(u32, std::rotr);
+i64rotr:      BINARY_FN(u64, std::rotr);
+f32abs:       UNARY_FN (f32, std::abs);
+f64abs:       UNARY_FN (f64, std::abs);
+f32neg:       UNARY_OP (f32, -);
+f64neg:       UNARY_OP (f64, -);
+f32ceil:      UNARY_FN (f32, std::ceil);
+f64ceil:      UNARY_FN (f64, std::ceil);
+f32floor:     UNARY_FN (f32, std::floor);
+f64floor:     UNARY_FN (f64, std::floor);
+f32trunc:     UNARY_FN (f32, std::trunc);
+f64trunc:     UNARY_FN (f64, std::trunc);
+f32nearest:   UNARY_FN (f32, std::nearbyint);
+f64nearest:   UNARY_FN (f64, std::nearbyint);
+f32sqrt:      UNARY_FN (f32, std::sqrt);
+f64sqrt:      UNARY_FN (f64, std::sqrt);
+f32add:       BINARY_OP(f32, +);
+f64add:       BINARY_OP(f64, +);
+f32sub:       BINARY_OP(f32, -);
+f64sub:       BINARY_OP(f64, -);
+f32mul:       BINARY_OP(f32, *);
+f64mul:       BINARY_OP(f64, *);
+f32div:       BINARY_OP(f32, /);
+f64div:       BINARY_OP(f64, /);
+f32min:       MINMAX   (f32, std::min);
+f64min:       MINMAX   (f64, std::min);
+f32max:       MINMAX   (f32, std::max);
+f64max:       MINMAX   (f64, std::max);
+f32copysign:  BINARY_FN(f32, std::copysign);
+f64copysign:  BINARY_FN(f64, std::copysign);
+i32wrap_i64:      UNARY_OP(i64, (int32_t));
+i64extend_i32_s:  UNARY_OP(i32, (int64_t));
+i64extend_i32_u:  UNARY_OP(u32, (uint64_t));
+i32trunc_f32_s:   TRUNC   (f32, (int32_t),           -2147483777.,           2147483648.);
+i64trunc_f32_s:   TRUNC   (f32, (int64_t),  -9223373136366404000.,  9223372036854776000.);
+i32trunc_f32_u:   TRUNC   (f32, (uint32_t),                   -1.,           4294967296.);
+i64trunc_f32_u:   TRUNC   (f32, (uint64_t),                   -1., 18446744073709552000.);
+i32trunc_f64_s:   TRUNC   (f64, (int32_t),           -2147483649.,           2147483648.);
+i64trunc_f64_s:   TRUNC   (f64, (int64_t),  -9223372036854777856.,  9223372036854776000.);
+i32trunc_f64_u:   TRUNC   (f64, (uint32_t),                   -1.,           4294967296.);
+i64trunc_f64_u:   TRUNC   (f64, (uint64_t),                   -1., 18446744073709552000.);
+f32convert_i32_s: UNARY_OP(i32, (float));
+f64convert_i32_s: UNARY_OP(i32, (double));
+f32convert_i32_u: UNARY_OP(u32, (float));
+f64convert_i32_u: UNARY_OP(u32, (double));
+f32convert_i64_s: UNARY_OP(i64, (float));
+f64convert_i64_s: UNARY_OP(i64, (double));
+f32convert_i64_u: UNARY_OP(u64, (float));
+f64convert_i64_u: UNARY_OP(u64, (double));
+f32demote_f64:    UNARY_OP(f64, (float));
+f64promote_f32:   UNARY_OP(f32, (double));
+// without type assertions these are noops
+i32reinterpret_f32: nextop();
+f32reinterpret_i32: nextop();
+i64reinterpret_f64: nextop();
+f64reinterpret_i64: nextop();
+i32extend8_s:  UNARY_OP(i32, (int32_t)(int8_t));
+i32extend16_s: UNARY_OP(i32, (int32_t)(int16_t));
+i64extend8_s:  UNARY_OP(i64, (int64_t)(int8_t));
+i64extend16_s: UNARY_OP(i64, (int64_t)(int16_t));
+i64extend32_s: UNARY_OP(i64, (int64_t)(int32_t));
+ref_null: {
+    read_leb128(iter);
+    stack.push((void*)nullptr);
+    nextop();
+}
+ref_is_null: {
+    // note that funcref is also a full 0 value when null
+    stack[-1].i32 = stack[-1].externref == nullptr;
+    nextop();
+}
+ref_func: {
+    uint32_t func_idx = read_leb128(iter);
+    stack.push(&functions[func_idx]);
+    nextop();
+}
+// bitwise comparison applies to both
+ref_eq: BINARY_OP(externref, ==);
+multibyte: goto *fc_gotos[*iter++];
+i32_trunc_sat_f32_s: TRUNC_SAT(f32, i32);
+i32_trunc_sat_f32_u: TRUNC_SAT(f32, u32);
+i32_trunc_sat_f64_s: TRUNC_SAT(f64, i32);
+i32_trunc_sat_f64_u: TRUNC_SAT(f64, u32);
+i64_trunc_sat_f32_s: TRUNC_SAT(f32, i64);
+i64_trunc_sat_f32_u: TRUNC_SAT(f32, u64);
+i64_trunc_sat_f64_s: TRUNC_SAT(f64, i64);
+i64_trunc_sat_f64_u: TRUNC_SAT(f64, u64);
+memory_init: {
+    uint32_t seg_idx = read_leb128(iter);
+    iter++;
+    uint32_t size = stack.pop().u32;
+    uint32_t src = stack.pop().u32;
+    uint32_t dest = stack.pop().u32;
+    memory->copy_into(dest, src, data_segments[seg_idx], size);
+    nextop();
+}
+data_drop: {
+    uint32_t seg_idx = read_leb128(iter);
+    data_segments[seg_idx].data = {};
+    nextop();
+}
+memory_copy: {
+    /* uint32_t mem_idx = */ read_leb128(iter);
+    /* uint32_t mem_idx = */ read_leb128(iter);
+    uint32_t size = stack.pop().u32;
+    uint32_t src = stack.pop().u32;
+    uint32_t dst = stack.pop().u32;
+    memory->memcpy(dst, src, size);
+    nextop();
+}
+memory_fill: {
+    /* uint32_t mem_idx = */ read_leb128(iter);
+    uint32_t size = stack.pop().u32;
+    uint32_t value = stack.pop().u32;
+    uint32_t ptr = stack.pop().u32;
+    memory->memset(ptr, value, size);
+    nextop();
+}
+table_init: {
+    uint32_t seg_idx = read_leb128(iter);
+    uint32_t table_idx = read_leb128(iter);
+    uint32_t size = stack.pop().u32;
+    uint32_t src = stack.pop().u32;
+    uint32_t dest = stack.pop().u32;
+
+    auto& table = tables[table_idx];
+    auto& element = elements[seg_idx];
+    table->copy_into(dest, src, element, size);
+    nextop();
+}
+elem_drop: {
+    uint32_t seg_idx = read_leb128(iter);
+    elements[seg_idx].elements.clear();
+    nextop();
+}
+table_copy: {
+    uint32_t dst_table = read_leb128(iter);
+    uint32_t src_table = read_leb128(iter);
+    uint32_t size = stack.pop().u32;
+    uint32_t src = stack.pop().u32;
+    uint32_t dst = stack.pop().u32;
+    tables[src_table]->memcpy(*tables[dst_table], dst, src, size);
+    nextop();
+}
+table_grow: {
+    uint32_t table_idx = read_leb128(iter);
+    uint32_t delta = stack.pop().u32;
+    WasmValue init = stack.pop();
+    stack.push(tables[table_idx]->grow(delta, init));
+    nextop();
+}
+table_size: {
+    uint32_t table_idx = read_leb128(iter);
+    stack.push(tables[table_idx]->size());
+    nextop();
+}
+table_fill: {
+    uint32_t table_idx = read_leb128(iter);
+    uint32_t size = stack.pop().u32;
+    WasmValue value = stack.pop();
+    uint32_t ptr = stack.pop().u32;
+    tables[table_idx]->memset(ptr, value, size);
+    nextop();
+}
+// clang-format on
 
 #undef UNARY_OP
 #undef UNARY_FN
@@ -1083,7 +1066,7 @@ void Instance::interpret(uint8_t *iter, tape<WasmValue> &stack) {
 #undef BINARY_FN
 #undef LOAD
 #undef STORE
-}
+};
 
 Instance::~Instance() {
     assert(initial_stack.empty());
