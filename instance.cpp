@@ -15,7 +15,7 @@ namespace mitey {
 
 Instance::Instance(std::shared_ptr<Module> module)
     : module(module), memory(nullptr), initial_stack(nullptr, 0),
-      control_stack(nullptr, 0), if_jumps(module->if_jumps),
+      initial_control_stack(nullptr, 0), if_jumps(module->if_jumps),
       block_ends(module->block_ends) {
 
     uint32_t buffer_size = 0;
@@ -35,7 +35,7 @@ Instance::Instance(std::shared_ptr<Module> module)
         };
 
     alloc(&initial_stack, STACK_SIZE / sizeof(WasmValue));
-    alloc(&control_stack, MAX_DEPTH);
+    alloc(&initial_control_stack, MAX_DEPTH);
     alloc(&functions, module->functions.size());
     alloc(&types, module->types.size());
     alloc(&globals, module->globals.size());
@@ -284,7 +284,7 @@ void Instance::initialize(const Imports &imports) {
             throw validation_error("start function");
         }
         try {
-            entrypoint(fn, initial_stack);
+            entrypoint(fn, initial_stack, initial_control_stack);
         } catch (const trap_error &e) {
             throw uninstantiable_error(e.what());
         }
@@ -388,10 +388,10 @@ FunctionInfo Instance::externalize_function(const FunctionInfo &fn) {
             }
 
             try {
-                entrypoint(fn, initial_stack);
+                entrypoint(fn, initial_stack, initial_control_stack);
             } catch (const trap_error &e) {
                 initial_stack.clear();
-                control_stack.clear();
+                initial_control_stack.clear();
                 throw;
             }
 
@@ -403,24 +403,24 @@ FunctionInfo Instance::externalize_function(const FunctionInfo &fn) {
     }
 }
 
-void Instance::entrypoint(const FunctionInfo &fn, tape<WasmValue> &stack) {
-    auto backup_cs = control_stack;
-
+void Instance::entrypoint(const FunctionInfo &fn, tape<WasmValue> &stack,
+                          tape<BrTarget> &control_stack) {
+    auto prev_start = control_stack.get_start();
     control_stack.set_start(control_stack.unsafe_ptr());
 
     try {
-        call_function_info(fn, nullptr, stack);
-        control_stack = backup_cs;
+        call_function_info(fn, nullptr, stack, control_stack);
+        control_stack.set_start(prev_start);
     } catch (const trap_error &) {
-        control_stack = backup_cs;
-        control_stack.clear();
+        control_stack.set_start(prev_start);
         throw;
     }
 }
 
 inline void Instance::call_function_info(const FunctionInfo &fn,
                                          uint8_t *return_to,
-                                         tape<WasmValue> &stack) {
+                                         tape<WasmValue> &stack,
+                                         tape<BrTarget> &control_stack) {
     if (fn.wasm_fn) {
         // parameters are the first locals and they're taken from the top of
         // the stack
@@ -441,7 +441,7 @@ inline void Instance::call_function_info(const FunctionInfo &fn,
         control_stack.push({locals_start, return_to,
                             static_cast<uint32_t>(fn.type.n_results)});
 
-        interpret(fn.wasm_fn.start, stack);
+        interpret(fn.wasm_fn.start, stack, control_stack);
 
         control_stack.set_start(cf_start);
         frame = prev;
@@ -456,7 +456,8 @@ inline void Instance::call_function_info(const FunctionInfo &fn,
     }
 }
 
-void Instance::interpret(uint8_t *iter, tape<WasmValue> &stack) {
+void Instance::interpret(uint8_t *iter, tape<WasmValue> &stack,
+                         tape<BrTarget> &control_stack) {
     using i32 = int32_t;
     using u32 = uint32_t;
     using i64 = int64_t;
@@ -712,7 +713,7 @@ return_:
     nextop();
 call: {
     FunctionInfo &fn = functions[read_leb128(iter)];
-    call_function_info(fn, iter, stack);
+    call_function_info(fn, iter, stack, control_stack);
     nextop();
 }
 call_indirect: {
@@ -735,7 +736,7 @@ call_indirect: {
     // entrypooint and call_function_info need to be revamped
     auto &fn = *funcref;
     if (fn.wasm_fn) {
-        fn.wasm_fn.instance->entrypoint(fn, stack);
+        fn.wasm_fn.instance->entrypoint(fn, stack, control_stack);
     } else {
         stack -= fn.type.n_params;
         if (fn.static_fn != nullptr) {
@@ -1097,7 +1098,7 @@ table_fill: {
 
 Instance::~Instance() {
     assert(initial_stack.empty());
-    assert(control_stack.empty());
+    assert(initial_control_stack.empty());
 }
 
 WasmMemory::WasmMemory() : memory(nullptr), current(0), maximum(0) {}

@@ -222,10 +222,10 @@ class Instance {
     std::shared_ptr<WasmMemory> memory;
     // internal stack
     tape<WasmValue> initial_stack;
+    // control stack
+    tape<BrTarget> initial_control_stack;
     // function-specific frames
     StackFrame frame;
-    // control stack
-    tape<BrTarget> control_stack;
     // functions
     std::span<FunctionInfo> functions;
     // types
@@ -246,10 +246,10 @@ class Instance {
     Exports exports;
 
     inline void call_function_info(const FunctionInfo &idx, uint8_t *return_to,
-                                   tape<WasmValue> &stack);
-    void interpret(uint8_t *iter, tape<WasmValue> &);
+                                   tape<WasmValue> &stack, tape<BrTarget> &);
+    void interpret(uint8_t *iter, tape<WasmValue> &, tape<BrTarget> &);
 
-    void entrypoint(const FunctionInfo &, tape<WasmValue> &);
+    void entrypoint(const FunctionInfo &, tape<WasmValue> &, tape<BrTarget> &);
 
     WasmValue interpret_const_inplace(uint8_t *iter) {
         return interpret_const(iter);
