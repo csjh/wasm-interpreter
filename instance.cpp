@@ -594,7 +594,22 @@ void Instance::interpret(uint8_t *iter, tape<WasmValue> &stack) {
                             static_cast<type>(stack[1].stacktype));            \
         nextop();                                                              \
     }
+#ifdef WASM_DEBUG
+#define nextop()                                                               \
+    do {                                                                       \
+        uint8_t byte = *iter++;                                                \
+        std::cerr << "reading instruction " << instructions[byte].c_str()      \
+                  << " at " << iter - module->bytes.get() << std::endl;        \
+        std::cerr << "stack contents: ";                                       \
+        for (WasmValue *p = frame.locals; p < stack.unsafe_ptr(); p++) {       \
+            std::cerr << p->u64 << " ";                                        \
+        }                                                                      \
+        std::cerr << std::endl << std::endl;                                   \
+        goto *gotos[byte];                                                     \
+    } while (0)
+#else
 #define nextop() goto *gotos[*iter++]
+#endif
 
     static void *gotos[] = {
 #define DEFINE_LABEL(name, _, byte) [byte] = &&name,
@@ -972,7 +987,19 @@ ref_func: {
 }
 // bitwise comparison applies to both
 ref_eq: BINARY_OP(externref, ==);
-multibyte: goto *fc_gotos[*iter++];
+multibyte: {
+    uint8_t byte = *iter++;
+#ifdef WASM_DEBUG
+    std::cerr << "reading multibyte instruction " << multibyte_instructions[byte].c_str()      \
+                << " at " << iter - module->bytes.get() << std::endl;        \
+    std::cerr << "stack contents: ";                                       \
+    for (WasmValue *p = frame.locals; p < stack.unsafe_ptr(); p++) {       \
+        std::cerr << p->u64 << " ";                                        \
+    }                                                                      \
+    std::cerr << std::endl << std::endl;                                   
+#endif
+    goto *fc_gotos[byte];
+}
 i32_trunc_sat_f32_s: TRUNC_SAT(f32, i32);
 i32_trunc_sat_f32_u: TRUNC_SAT(f32, u32);
 i32_trunc_sat_f64_s: TRUNC_SAT(f64, i32);
