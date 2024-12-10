@@ -651,6 +651,8 @@ HANDLER(unreachable) {
 HANDLER(nop) { nextop(); }
 HANDLER(block) {
     auto sn = RuntimeType::read_blocktype(instance.types, iter);
+    if (instance.block_ends.empty())
+        __builtin_unreachable();
     const auto &block_end = instance.block_ends.find(iter)->second;
     control_stack.push({stack.unsafe_ptr() - sn.n_params, block_end,
                         static_cast<uint32_t>(sn.n_results)});
@@ -669,6 +671,8 @@ HANDLER(loop) {
 HANDLER(if_) {
     auto sn = RuntimeType::read_blocktype(instance.types, iter);
     uint32_t cond = stack.pop().u32;
+    if (instance.if_jumps.empty())
+        __builtin_unreachable();
     const auto &if_jump = instance.if_jumps.find(iter)->second;
     control_stack.push({stack.unsafe_ptr() - sn.n_params, if_jump.end,
                         static_cast<uint32_t>(sn.n_results)});
