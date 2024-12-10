@@ -204,6 +204,12 @@ template <typename T> class tape {
 
 class Instance {
     friend class Module;
+#define FRIEND_HANDLER(name, str, byte)                                        \
+    friend void name(Instance &, uint8_t *, tape<WasmValue> &,                 \
+                     tape<BrTarget> &);
+    FOREACH_INSTRUCTION(FRIEND_HANDLER)
+    FOREACH_MULTIBYTE_INSTRUCTION(FRIEND_HANDLER)
+#undef FRIEND_HANDLER
 
     static constexpr uint32_t STACK_SIZE = 5 * 1024 * 1024; // 5mb
     static constexpr uint32_t MAX_DEPTH = 1000;
