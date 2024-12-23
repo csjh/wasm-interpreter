@@ -988,6 +988,25 @@ class WasmStack : protected std::vector<valtype> {
             throw validation_error("type mismatch");
         }
     }
+
+    void apply(const Signature &signature) {
+        pop(signature.params);
+        push(signature.results);
+    };
+
+    void enter_flow(const std::vector<valtype> &expected) {
+        pop(expected);
+        push(valtype::null);
+        push(expected);
+    };
+
+    void check_br(std::vector<ControlFlow> &control_stack, uint32_t depth) {
+        ensure(depth < control_stack.size(), "unknown label");
+        auto &expected_at_target =
+            control_stack[control_stack.size() - depth - 1];
+        pop(expected_at_target.expected);
+        push(expected_at_target.expected);
+    };
 };
 
 void Module::validate(safe_byte_iterator &iter, FunctionShell &fn) {
@@ -1001,24 +1020,7 @@ void Module::validate(safe_byte_iterator &iter, FunctionShell &fn) {
     auto control_stack = std::vector<ControlFlow>(
         {ControlFlow(fn.type.results, fn.type, false, fn)});
 
-    auto apply = [&](Signature signature) {
-        stack.pop(signature.params);
-        stack.push(signature.results);
-    };
-
-    auto enter_flow = [&](const std::vector<valtype> &expected) {
-        stack.pop(expected);
-        stack.push(valtype::null);
-        stack.push(expected);
-    };
-
-    auto check_br = [&](uint32_t depth) {
-        ensure(depth < control_stack.size(), "unknown label");
-        auto &expected_at_target =
-            control_stack[control_stack.size() - depth - 1];
-        stack.pop(expected_at_target.expected);
-        stack.push(expected_at_target.expected);
-    };
+    // return handlers[*iter++](*this, iter, fn, stack, control_stack);
 
 #define LOAD(type, stacktype)                                                  \
     {                                                                          \
@@ -1031,7 +1033,7 @@ void Module::validate(safe_byte_iterator &iter, FunctionShell &fn) {
         ensure(align <= sizeof(type),                                          \
                "alignment must not be larger than natural");                   \
         /* uint32_t offset = */ safe_read_leb128<uint32_t>(iter);              \
-        apply({{valtype::i32}, {stacktype}});                                  \
+        stack.apply({{valtype::i32}, {stacktype}});                            \
         break;                                                                 \
     }
 
@@ -1049,7 +1051,7 @@ void Module::validate(safe_byte_iterator &iter, FunctionShell &fn) {
         ensure(align <= sizeof(type),                                          \
                "alignment must not be larger than natural");                   \
         /* uint32_t offset = */ safe_read_leb128<uint32_t>(iter);              \
-        apply({{valtype::i32, stacktype}, {}});                                \
+        stack.apply({{valtype::i32, stacktype}, {}});                          \
         break;                                                                 \
     }
 
@@ -1087,7 +1089,7 @@ void Module::validate(safe_byte_iterator &iter, FunctionShell &fn) {
             auto signature = Signature::read_blocktype(types, iter);
             uint8_t *block_start = iter.unsafe_ptr();
 
-            enter_flow(signature.params);
+            stack.enter_flow(signature.params);
             control_stack.push_back(ControlFlow(signature.results, signature,
                                                 stack.polymorphism(),
                                                 Block(block_start)));
@@ -1097,7 +1099,7 @@ void Module::validate(safe_byte_iterator &iter, FunctionShell &fn) {
         case loop: {
             auto signature = Signature::read_blocktype(types, iter);
 
-            enter_flow(signature.params);
+            stack.enter_flow(signature.params);
             control_stack.push_back(ControlFlow(signature.params, signature,
                                                 stack.polymorphism(), Loop()));
             stack.unpolymorphize();
@@ -1108,7 +1110,7 @@ void Module::validate(safe_byte_iterator &iter, FunctionShell &fn) {
             uint8_t *if_start = iter.unsafe_ptr();
 
             stack.pop(valtype::i32);
-            enter_flow(signature.params);
+            stack.enter_flow(signature.params);
             control_stack.push_back(ControlFlow(signature.results, signature,
                                                 stack.polymorphism(),
                                                 If(if_start)));
@@ -1166,14 +1168,14 @@ void Module::validate(safe_byte_iterator &iter, FunctionShell &fn) {
             break;
         }
         case br: {
-            check_br(safe_read_leb128<uint32_t>(iter));
+            stack.check_br(control_stack, safe_read_leb128<uint32_t>(iter));
             stack.polymorphize();
             break;
         }
         case br_if: {
             stack.pop(valtype::i32);
             uint32_t depth = safe_read_leb128<uint32_t>(iter);
-            check_br(depth);
+            stack.check_br(control_stack, depth);
             break;
         }
         case br_table: {
@@ -1197,7 +1199,7 @@ void Module::validate(safe_byte_iterator &iter, FunctionShell &fn) {
                     ensure(default_target.size() == target.size(),
                            "type mismatch");
                 } else {
-                    check_br(depth);
+                    stack.check_br(control_stack, depth);
                     ensure(default_target == target, "type mismatch");
                 }
             }
@@ -1205,7 +1207,7 @@ void Module::validate(safe_byte_iterator &iter, FunctionShell &fn) {
             break;
         }
         case return_:
-            check_br(control_stack.size() - 1);
+            stack.check_br(control_stack, control_stack.size() - 1);
             stack.polymorphize();
             break;
         case call: {
@@ -1213,7 +1215,7 @@ void Module::validate(safe_byte_iterator &iter, FunctionShell &fn) {
             ensure(fn_idx < functions.size(), "unknown function");
 
             FunctionShell &fn = functions[fn_idx];
-            apply(fn.type);
+            stack.apply(fn.type);
             break;
         }
         case call_indirect: {
@@ -1226,7 +1228,7 @@ void Module::validate(safe_byte_iterator &iter, FunctionShell &fn) {
             ensure(table_idx < tables.size(), "unknown table");
             ensure(tables[table_idx].type == valtype::funcref, "type mismatch");
 
-            apply(types[type_idx]);
+            stack.apply(types[type_idx]);
             break;
         }
         case drop:
@@ -1240,7 +1242,7 @@ void Module::validate(safe_byte_iterator &iter, FunctionShell &fn) {
             ensure(ty == valtype::any || is_numtype(ty), "type mismatch");
 
             // then apply the dynamic type
-            apply({{ty, ty}, {ty}});
+            stack.apply({{ty, ty}, {ty}});
             break;
         }
         case select_t: {
@@ -1253,49 +1255,49 @@ void Module::validate(safe_byte_iterator &iter, FunctionShell &fn) {
             stack.pop(valtype::i32);
             valtype ty = stack.back();
             // then apply the dynamic type
-            apply({{ty, ty}, {ty}});
+            stack.apply({{ty, ty}, {ty}});
             break;
         }
         case localget: {
             uint32_t local_idx = safe_read_leb128<uint32_t>(iter);
             ensure(local_idx < fn.locals.size(), "unknown local");
             valtype local_ty = fn.locals[local_idx];
-            apply({{}, {local_ty}});
+            stack.apply({{}, {local_ty}});
             break;
         }
         case localset: {
             uint32_t local_idx = safe_read_leb128<uint32_t>(iter);
             ensure(local_idx < fn.locals.size(), "unknown local");
             valtype local_ty = fn.locals[local_idx];
-            apply({{local_ty}, {}});
+            stack.apply({{local_ty}, {}});
             break;
         }
         case localtee: {
             uint32_t local_idx = safe_read_leb128<uint32_t>(iter);
             ensure(local_idx < fn.locals.size(), "unknown local");
             valtype locaL_ty = fn.locals[local_idx];
-            apply({{locaL_ty}, {locaL_ty}});
+            stack.apply({{locaL_ty}, {locaL_ty}});
             break;
         }
         case tableget: {
             uint32_t table_idx = safe_read_leb128<uint32_t>(iter);
             ensure(table_idx < tables.size(), "unknown table");
             valtype table_ty = tables[table_idx].type;
-            apply({{valtype::i32}, {table_ty}});
+            stack.apply({{valtype::i32}, {table_ty}});
             break;
         }
         case tableset: {
             uint32_t table_idx = safe_read_leb128<uint32_t>(iter);
             ensure(table_idx < tables.size(), "unknown table");
             valtype table_ty = tables[table_idx].type;
-            apply({{valtype::i32, table_ty}, {}});
+            stack.apply({{valtype::i32, table_ty}, {}});
             break;
         }
         case globalget: {
             uint32_t global_idx = safe_read_leb128<uint32_t>(iter);
             ensure(global_idx < globals.size(), "unknown global");
             valtype global_ty = globals[global_idx].type;
-            apply({{}, {global_ty}});
+            stack.apply({{}, {global_ty}});
             break;
         }
         case globalset: {
@@ -1304,39 +1306,39 @@ void Module::validate(safe_byte_iterator &iter, FunctionShell &fn) {
             ensure(globals[global_idx].mutability == mut::var,
                    "global is immutable");
             valtype global_ty = globals[global_idx].type;
-            apply({{global_ty}, {}});
+            stack.apply({{global_ty}, {}});
             break;
         }
         case memorysize: {
             if (*iter++ != 0)
                 throw malformed_error("zero byte expected");
             ensure(memory.exists, "unknown memory");
-            apply({{}, {valtype::i32}});
+            stack.apply({{}, {valtype::i32}});
             break;
         }
         case memorygrow: {
             if (*iter++ != 0)
                 throw malformed_error("zero byte expected");
             ensure(memory.exists, "unknown memory");
-            apply({{valtype::i32}, {valtype::i32}});
+            stack.apply({{valtype::i32}, {valtype::i32}});
             break;
         }
         case i32const:
             safe_read_sleb128<uint32_t>(iter);
-            apply({{}, {valtype::i32}});
+            stack.apply({{}, {valtype::i32}});
             break;
         case i64const:
             safe_read_sleb128<uint64_t>(iter);
-            apply({{}, {valtype::i64}});
+            stack.apply({{}, {valtype::i64}});
             break;
         case f32const: {
             iter += sizeof(float);
-            apply({{}, {valtype::f32}});
+            stack.apply({{}, {valtype::f32}});
             break;
         }
         case f64const:
             iter += sizeof(double);
-            apply({{}, {valtype::f64}});
+            stack.apply({{}, {valtype::f64}});
             break;
             // clang-format off
         case i32load:     LOAD(uint32_t,  valtype::i32);
@@ -1362,157 +1364,157 @@ void Module::validate(safe_byte_iterator &iter, FunctionShell &fn) {
         case i64store8:   STORE(uint8_t,  valtype::i64);
         case i64store16:  STORE(uint16_t, valtype::i64);
         case i64store32:  STORE(uint32_t, valtype::i64);
-        case i32eqz:      apply({{valtype::i32              }, {valtype::i32}}); break;
-        case i64eqz:      apply({{valtype::i64              }, {valtype::i32}}); break;
-        case i32eq:       apply({{valtype::i32, valtype::i32}, {valtype::i32}}); break;
-        case i64eq:       apply({{valtype::i64, valtype::i64}, {valtype::i32}}); break;
-        case i32ne:       apply({{valtype::i32, valtype::i32}, {valtype::i32}}); break;
-        case i64ne:       apply({{valtype::i64, valtype::i64}, {valtype::i32}}); break;
-        case i32lt_s:     apply({{valtype::i32, valtype::i32}, {valtype::i32}}); break;
-        case i64lt_s:     apply({{valtype::i64, valtype::i64}, {valtype::i32}}); break;
-        case i32lt_u:     apply({{valtype::i32, valtype::i32}, {valtype::i32}}); break;
-        case i64lt_u:     apply({{valtype::i64, valtype::i64}, {valtype::i32}}); break;
-        case i32gt_s:     apply({{valtype::i32, valtype::i32}, {valtype::i32}}); break;
-        case i64gt_s:     apply({{valtype::i64, valtype::i64}, {valtype::i32}}); break;
-        case i32gt_u:     apply({{valtype::i32, valtype::i32}, {valtype::i32}}); break;
-        case i64gt_u:     apply({{valtype::i64, valtype::i64}, {valtype::i32}}); break;
-        case i32le_s:     apply({{valtype::i32, valtype::i32}, {valtype::i32}}); break;
-        case i64le_s:     apply({{valtype::i64, valtype::i64}, {valtype::i32}}); break;
-        case i32le_u:     apply({{valtype::i32, valtype::i32}, {valtype::i32}}); break;
-        case i64le_u:     apply({{valtype::i64, valtype::i64}, {valtype::i32}}); break;
-        case i32ge_s:     apply({{valtype::i32, valtype::i32}, {valtype::i32}}); break;
-        case i64ge_s:     apply({{valtype::i64, valtype::i64}, {valtype::i32}}); break;
-        case i32ge_u:     apply({{valtype::i32, valtype::i32}, {valtype::i32}}); break;
-        case i64ge_u:     apply({{valtype::i64, valtype::i64}, {valtype::i32}}); break;
-        case f32eq:       apply({{valtype::f32, valtype::f32}, {valtype::i32}}); break;
-        case f64eq:       apply({{valtype::f64, valtype::f64}, {valtype::i32}}); break;
-        case f32ne:       apply({{valtype::f32, valtype::f32}, {valtype::i32}}); break;
-        case f64ne:       apply({{valtype::f64, valtype::f64}, {valtype::i32}}); break;
-        case f32lt:       apply({{valtype::f32, valtype::f32}, {valtype::i32}}); break;
-        case f64lt:       apply({{valtype::f64, valtype::f64}, {valtype::i32}}); break;
-        case f32gt:       apply({{valtype::f32, valtype::f32}, {valtype::i32}}); break;
-        case f64gt:       apply({{valtype::f64, valtype::f64}, {valtype::i32}}); break;
-        case f32le:       apply({{valtype::f32, valtype::f32}, {valtype::i32}}); break;
-        case f64le:       apply({{valtype::f64, valtype::f64}, {valtype::i32}}); break;
-        case f32ge:       apply({{valtype::f32, valtype::f32}, {valtype::i32}}); break;
-        case f64ge:       apply({{valtype::f64, valtype::f64}, {valtype::i32}}); break;
-        case i32clz:      apply({{valtype::i32              }, {valtype::i32}}); break;
-        case i64clz:      apply({{valtype::i64              }, {valtype::i64}}); break;
-        case i32ctz:      apply({{valtype::i32              }, {valtype::i32}}); break;
-        case i64ctz:      apply({{valtype::i64              }, {valtype::i64}}); break;
-        case i32popcnt:   apply({{valtype::i32              }, {valtype::i32}}); break;
-        case i64popcnt:   apply({{valtype::i64              }, {valtype::i64}}); break;
-        case i32add:      apply({{valtype::i32, valtype::i32}, {valtype::i32}}); break;
-        case i64add:      apply({{valtype::i64, valtype::i64}, {valtype::i64}}); break;
-        case i32sub:      apply({{valtype::i32, valtype::i32}, {valtype::i32}}); break;
-        case i64sub:      apply({{valtype::i64, valtype::i64}, {valtype::i64}}); break;
-        case i32mul:      apply({{valtype::i32, valtype::i32}, {valtype::i32}}); break;
-        case i64mul:      apply({{valtype::i64, valtype::i64}, {valtype::i64}}); break;
-        case i32div_s:    apply({{valtype::i32, valtype::i32}, {valtype::i32}}); break;
-        case i64div_s:    apply({{valtype::i64, valtype::i64}, {valtype::i64}}); break;
-        case i32div_u:    apply({{valtype::i32, valtype::i32}, {valtype::i32}}); break;
-        case i64div_u:    apply({{valtype::i64, valtype::i64}, {valtype::i64}}); break;
-        case i32rem_s:    apply({{valtype::i32, valtype::i32}, {valtype::i32}}); break;
-        case i64rem_s:    apply({{valtype::i64, valtype::i64}, {valtype::i64}}); break;
-        case i32rem_u:    apply({{valtype::i32, valtype::i32}, {valtype::i32}}); break;
-        case i64rem_u:    apply({{valtype::i64, valtype::i64}, {valtype::i64}}); break;
-        case i32and:      apply({{valtype::i32, valtype::i32}, {valtype::i32}}); break;
-        case i64and:      apply({{valtype::i64, valtype::i64}, {valtype::i64}}); break;
-        case i32or:       apply({{valtype::i32, valtype::i32}, {valtype::i32}}); break;
-        case i64or:       apply({{valtype::i64, valtype::i64}, {valtype::i64}}); break;
-        case i32xor:      apply({{valtype::i32, valtype::i32}, {valtype::i32}}); break;
-        case i64xor:      apply({{valtype::i64, valtype::i64}, {valtype::i64}}); break;
-        case i32shl:      apply({{valtype::i32, valtype::i32}, {valtype::i32}}); break;
-        case i64shl:      apply({{valtype::i64, valtype::i64}, {valtype::i64}}); break;
-        case i32shr_s:    apply({{valtype::i32, valtype::i32}, {valtype::i32}}); break;
-        case i64shr_s:    apply({{valtype::i64, valtype::i64}, {valtype::i64}}); break;
-        case i32shr_u:    apply({{valtype::i32, valtype::i32}, {valtype::i32}}); break;
-        case i64shr_u:    apply({{valtype::i64, valtype::i64}, {valtype::i64}}); break;
-        case i32rotl:     apply({{valtype::i32, valtype::i32}, {valtype::i32}}); break;
-        case i64rotl:     apply({{valtype::i64, valtype::i64}, {valtype::i64}}); break;
-        case i32rotr:     apply({{valtype::i32, valtype::i32}, {valtype::i32}}); break;
-        case i64rotr:     apply({{valtype::i64, valtype::i64}, {valtype::i64}}); break;
-        case f32abs:      apply({{valtype::f32              }, {valtype::f32}}); break;
-        case f64abs:      apply({{valtype::f64              }, {valtype::f64}}); break;
-        case f32neg:      apply({{valtype::f32              }, {valtype::f32}}); break;
-        case f64neg:      apply({{valtype::f64              }, {valtype::f64}}); break;
-        case f32ceil:     apply({{valtype::f32              }, {valtype::f32}}); break;
-        case f64ceil:     apply({{valtype::f64              }, {valtype::f64}}); break;
-        case f32floor:    apply({{valtype::f32              }, {valtype::f32}}); break;
-        case f64floor:    apply({{valtype::f64              }, {valtype::f64}}); break;
-        case f32trunc:    apply({{valtype::f32              }, {valtype::f32}}); break;
-        case f64trunc:    apply({{valtype::f64              }, {valtype::f64}}); break;
-        case f32nearest:  apply({{valtype::f32              }, {valtype::f32}}); break;
-        case f64nearest:  apply({{valtype::f64              }, {valtype::f64}}); break;
-        case f32sqrt:     apply({{valtype::f32              }, {valtype::f32}}); break;
-        case f64sqrt:     apply({{valtype::f64              }, {valtype::f64}}); break;
-        case f32add:      apply({{valtype::f32, valtype::f32}, {valtype::f32}}); break;
-        case f64add:      apply({{valtype::f64, valtype::f64}, {valtype::f64}}); break;
-        case f32sub:      apply({{valtype::f32, valtype::f32}, {valtype::f32}}); break;
-        case f64sub:      apply({{valtype::f64, valtype::f64}, {valtype::f64}}); break;
-        case f32mul:      apply({{valtype::f32, valtype::f32}, {valtype::f32}}); break;
-        case f64mul:      apply({{valtype::f64, valtype::f64}, {valtype::f64}}); break;
-        case f32div:      apply({{valtype::f32, valtype::f32}, {valtype::f32}}); break;
-        case f64div:      apply({{valtype::f64, valtype::f64}, {valtype::f64}}); break;
-        case f32min:      apply({{valtype::f32, valtype::f32}, {valtype::f32}}); break;
-        case f64min:      apply({{valtype::f64, valtype::f64}, {valtype::f64}}); break;
-        case f32max:      apply({{valtype::f32, valtype::f32}, {valtype::f32}}); break;
-        case f64max:      apply({{valtype::f64, valtype::f64}, {valtype::f64}}); break;
-        case f32copysign: apply({{valtype::f32, valtype::f32}, {valtype::f32}}); break;
-        case f64copysign: apply({{valtype::f64, valtype::f64}, {valtype::f64}}); break;
-        case i32wrap_i64:      apply({{valtype::i64}, {valtype::i32}}); break;
-        case i64extend_i32_s:  apply({{valtype::i32}, {valtype::i64}}); break;
-        case i64extend_i32_u:  apply({{valtype::i32}, {valtype::i64}}); break;
-        case i32trunc_f32_s:   apply({{valtype::f32}, {valtype::i32}}); break;
-        case i64trunc_f32_s:   apply({{valtype::f32}, {valtype::i64}}); break;
-        case i32trunc_f32_u:   apply({{valtype::f32}, {valtype::i32}}); break;
-        case i64trunc_f32_u:   apply({{valtype::f32}, {valtype::i64}}); break;
-        case i32trunc_f64_s:   apply({{valtype::f64}, {valtype::i32}}); break;
-        case i64trunc_f64_s:   apply({{valtype::f64}, {valtype::i64}}); break;
-        case i32trunc_f64_u:   apply({{valtype::f64}, {valtype::i32}}); break;
-        case i64trunc_f64_u:   apply({{valtype::f64}, {valtype::i64}}); break;
-        case f32convert_i32_s: apply({{valtype::i32}, {valtype::f32}}); break;
-        case f64convert_i32_s: apply({{valtype::i32}, {valtype::f64}}); break;
-        case f32convert_i32_u: apply({{valtype::i32}, {valtype::f32}}); break;
-        case f64convert_i32_u: apply({{valtype::i32}, {valtype::f64}}); break;
-        case f32convert_i64_s: apply({{valtype::i64}, {valtype::f32}}); break;
-        case f64convert_i64_s: apply({{valtype::i64}, {valtype::f64}}); break;
-        case f32convert_i64_u: apply({{valtype::i64}, {valtype::f32}}); break;
-        case f64convert_i64_u: apply({{valtype::i64}, {valtype::f64}}); break;
-        case f32demote_f64:    apply({{valtype::f64}, {valtype::f32}}); break;
-        case f64promote_f32:   apply({{valtype::f32}, {valtype::f64}}); break;
-        case i32reinterpret_f32: apply({{valtype::f32}, {valtype::i32}}); break;
-        case f32reinterpret_i32: apply({{valtype::i32}, {valtype::f32}}); break;
-        case i64reinterpret_f64: apply({{valtype::f64}, {valtype::i64}}); break;
-        case f64reinterpret_i64: apply({{valtype::i64}, {valtype::f64}}); break;
-        case i32extend8_s:  apply({{valtype::i32}, {valtype::i32}}); break;
-        case i32extend16_s: apply({{valtype::i32}, {valtype::i32}}); break;
-        case i64extend8_s:  apply({{valtype::i64}, {valtype::i64}}); break;
-        case i64extend16_s: apply({{valtype::i64}, {valtype::i64}}); break;
-        case i64extend32_s: apply({{valtype::i64}, {valtype::i64}}); break;
+        case i32eqz:      stack.apply({{valtype::i32              }, {valtype::i32}}); break;
+        case i64eqz:      stack.apply({{valtype::i64              }, {valtype::i32}}); break;
+        case i32eq:       stack.apply({{valtype::i32, valtype::i32}, {valtype::i32}}); break;
+        case i64eq:       stack.apply({{valtype::i64, valtype::i64}, {valtype::i32}}); break;
+        case i32ne:       stack.apply({{valtype::i32, valtype::i32}, {valtype::i32}}); break;
+        case i64ne:       stack.apply({{valtype::i64, valtype::i64}, {valtype::i32}}); break;
+        case i32lt_s:     stack.apply({{valtype::i32, valtype::i32}, {valtype::i32}}); break;
+        case i64lt_s:     stack.apply({{valtype::i64, valtype::i64}, {valtype::i32}}); break;
+        case i32lt_u:     stack.apply({{valtype::i32, valtype::i32}, {valtype::i32}}); break;
+        case i64lt_u:     stack.apply({{valtype::i64, valtype::i64}, {valtype::i32}}); break;
+        case i32gt_s:     stack.apply({{valtype::i32, valtype::i32}, {valtype::i32}}); break;
+        case i64gt_s:     stack.apply({{valtype::i64, valtype::i64}, {valtype::i32}}); break;
+        case i32gt_u:     stack.apply({{valtype::i32, valtype::i32}, {valtype::i32}}); break;
+        case i64gt_u:     stack.apply({{valtype::i64, valtype::i64}, {valtype::i32}}); break;
+        case i32le_s:     stack.apply({{valtype::i32, valtype::i32}, {valtype::i32}}); break;
+        case i64le_s:     stack.apply({{valtype::i64, valtype::i64}, {valtype::i32}}); break;
+        case i32le_u:     stack.apply({{valtype::i32, valtype::i32}, {valtype::i32}}); break;
+        case i64le_u:     stack.apply({{valtype::i64, valtype::i64}, {valtype::i32}}); break;
+        case i32ge_s:     stack.apply({{valtype::i32, valtype::i32}, {valtype::i32}}); break;
+        case i64ge_s:     stack.apply({{valtype::i64, valtype::i64}, {valtype::i32}}); break;
+        case i32ge_u:     stack.apply({{valtype::i32, valtype::i32}, {valtype::i32}}); break;
+        case i64ge_u:     stack.apply({{valtype::i64, valtype::i64}, {valtype::i32}}); break;
+        case f32eq:       stack.apply({{valtype::f32, valtype::f32}, {valtype::i32}}); break;
+        case f64eq:       stack.apply({{valtype::f64, valtype::f64}, {valtype::i32}}); break;
+        case f32ne:       stack.apply({{valtype::f32, valtype::f32}, {valtype::i32}}); break;
+        case f64ne:       stack.apply({{valtype::f64, valtype::f64}, {valtype::i32}}); break;
+        case f32lt:       stack.apply({{valtype::f32, valtype::f32}, {valtype::i32}}); break;
+        case f64lt:       stack.apply({{valtype::f64, valtype::f64}, {valtype::i32}}); break;
+        case f32gt:       stack.apply({{valtype::f32, valtype::f32}, {valtype::i32}}); break;
+        case f64gt:       stack.apply({{valtype::f64, valtype::f64}, {valtype::i32}}); break;
+        case f32le:       stack.apply({{valtype::f32, valtype::f32}, {valtype::i32}}); break;
+        case f64le:       stack.apply({{valtype::f64, valtype::f64}, {valtype::i32}}); break;
+        case f32ge:       stack.apply({{valtype::f32, valtype::f32}, {valtype::i32}}); break;
+        case f64ge:       stack.apply({{valtype::f64, valtype::f64}, {valtype::i32}}); break;
+        case i32clz:      stack.apply({{valtype::i32              }, {valtype::i32}}); break;
+        case i64clz:      stack.apply({{valtype::i64              }, {valtype::i64}}); break;
+        case i32ctz:      stack.apply({{valtype::i32              }, {valtype::i32}}); break;
+        case i64ctz:      stack.apply({{valtype::i64              }, {valtype::i64}}); break;
+        case i32popcnt:   stack.apply({{valtype::i32              }, {valtype::i32}}); break;
+        case i64popcnt:   stack.apply({{valtype::i64              }, {valtype::i64}}); break;
+        case i32add:      stack.apply({{valtype::i32, valtype::i32}, {valtype::i32}}); break;
+        case i64add:      stack.apply({{valtype::i64, valtype::i64}, {valtype::i64}}); break;
+        case i32sub:      stack.apply({{valtype::i32, valtype::i32}, {valtype::i32}}); break;
+        case i64sub:      stack.apply({{valtype::i64, valtype::i64}, {valtype::i64}}); break;
+        case i32mul:      stack.apply({{valtype::i32, valtype::i32}, {valtype::i32}}); break;
+        case i64mul:      stack.apply({{valtype::i64, valtype::i64}, {valtype::i64}}); break;
+        case i32div_s:    stack.apply({{valtype::i32, valtype::i32}, {valtype::i32}}); break;
+        case i64div_s:    stack.apply({{valtype::i64, valtype::i64}, {valtype::i64}}); break;
+        case i32div_u:    stack.apply({{valtype::i32, valtype::i32}, {valtype::i32}}); break;
+        case i64div_u:    stack.apply({{valtype::i64, valtype::i64}, {valtype::i64}}); break;
+        case i32rem_s:    stack.apply({{valtype::i32, valtype::i32}, {valtype::i32}}); break;
+        case i64rem_s:    stack.apply({{valtype::i64, valtype::i64}, {valtype::i64}}); break;
+        case i32rem_u:    stack.apply({{valtype::i32, valtype::i32}, {valtype::i32}}); break;
+        case i64rem_u:    stack.apply({{valtype::i64, valtype::i64}, {valtype::i64}}); break;
+        case i32and:      stack.apply({{valtype::i32, valtype::i32}, {valtype::i32}}); break;
+        case i64and:      stack.apply({{valtype::i64, valtype::i64}, {valtype::i64}}); break;
+        case i32or:       stack.apply({{valtype::i32, valtype::i32}, {valtype::i32}}); break;
+        case i64or:       stack.apply({{valtype::i64, valtype::i64}, {valtype::i64}}); break;
+        case i32xor:      stack.apply({{valtype::i32, valtype::i32}, {valtype::i32}}); break;
+        case i64xor:      stack.apply({{valtype::i64, valtype::i64}, {valtype::i64}}); break;
+        case i32shl:      stack.apply({{valtype::i32, valtype::i32}, {valtype::i32}}); break;
+        case i64shl:      stack.apply({{valtype::i64, valtype::i64}, {valtype::i64}}); break;
+        case i32shr_s:    stack.apply({{valtype::i32, valtype::i32}, {valtype::i32}}); break;
+        case i64shr_s:    stack.apply({{valtype::i64, valtype::i64}, {valtype::i64}}); break;
+        case i32shr_u:    stack.apply({{valtype::i32, valtype::i32}, {valtype::i32}}); break;
+        case i64shr_u:    stack.apply({{valtype::i64, valtype::i64}, {valtype::i64}}); break;
+        case i32rotl:     stack.apply({{valtype::i32, valtype::i32}, {valtype::i32}}); break;
+        case i64rotl:     stack.apply({{valtype::i64, valtype::i64}, {valtype::i64}}); break;
+        case i32rotr:     stack.apply({{valtype::i32, valtype::i32}, {valtype::i32}}); break;
+        case i64rotr:     stack.apply({{valtype::i64, valtype::i64}, {valtype::i64}}); break;
+        case f32abs:      stack.apply({{valtype::f32              }, {valtype::f32}}); break;
+        case f64abs:      stack.apply({{valtype::f64              }, {valtype::f64}}); break;
+        case f32neg:      stack.apply({{valtype::f32              }, {valtype::f32}}); break;
+        case f64neg:      stack.apply({{valtype::f64              }, {valtype::f64}}); break;
+        case f32ceil:     stack.apply({{valtype::f32              }, {valtype::f32}}); break;
+        case f64ceil:     stack.apply({{valtype::f64              }, {valtype::f64}}); break;
+        case f32floor:    stack.apply({{valtype::f32              }, {valtype::f32}}); break;
+        case f64floor:    stack.apply({{valtype::f64              }, {valtype::f64}}); break;
+        case f32trunc:    stack.apply({{valtype::f32              }, {valtype::f32}}); break;
+        case f64trunc:    stack.apply({{valtype::f64              }, {valtype::f64}}); break;
+        case f32nearest:  stack.apply({{valtype::f32              }, {valtype::f32}}); break;
+        case f64nearest:  stack.apply({{valtype::f64              }, {valtype::f64}}); break;
+        case f32sqrt:     stack.apply({{valtype::f32              }, {valtype::f32}}); break;
+        case f64sqrt:     stack.apply({{valtype::f64              }, {valtype::f64}}); break;
+        case f32add:      stack.apply({{valtype::f32, valtype::f32}, {valtype::f32}}); break;
+        case f64add:      stack.apply({{valtype::f64, valtype::f64}, {valtype::f64}}); break;
+        case f32sub:      stack.apply({{valtype::f32, valtype::f32}, {valtype::f32}}); break;
+        case f64sub:      stack.apply({{valtype::f64, valtype::f64}, {valtype::f64}}); break;
+        case f32mul:      stack.apply({{valtype::f32, valtype::f32}, {valtype::f32}}); break;
+        case f64mul:      stack.apply({{valtype::f64, valtype::f64}, {valtype::f64}}); break;
+        case f32div:      stack.apply({{valtype::f32, valtype::f32}, {valtype::f32}}); break;
+        case f64div:      stack.apply({{valtype::f64, valtype::f64}, {valtype::f64}}); break;
+        case f32min:      stack.apply({{valtype::f32, valtype::f32}, {valtype::f32}}); break;
+        case f64min:      stack.apply({{valtype::f64, valtype::f64}, {valtype::f64}}); break;
+        case f32max:      stack.apply({{valtype::f32, valtype::f32}, {valtype::f32}}); break;
+        case f64max:      stack.apply({{valtype::f64, valtype::f64}, {valtype::f64}}); break;
+        case f32copysign: stack.apply({{valtype::f32, valtype::f32}, {valtype::f32}}); break;
+        case f64copysign: stack.apply({{valtype::f64, valtype::f64}, {valtype::f64}}); break;
+        case i32wrap_i64:      stack.apply({{valtype::i64}, {valtype::i32}}); break;
+        case i64extend_i32_s:  stack.apply({{valtype::i32}, {valtype::i64}}); break;
+        case i64extend_i32_u:  stack.apply({{valtype::i32}, {valtype::i64}}); break;
+        case i32trunc_f32_s:   stack.apply({{valtype::f32}, {valtype::i32}}); break;
+        case i64trunc_f32_s:   stack.apply({{valtype::f32}, {valtype::i64}}); break;
+        case i32trunc_f32_u:   stack.apply({{valtype::f32}, {valtype::i32}}); break;
+        case i64trunc_f32_u:   stack.apply({{valtype::f32}, {valtype::i64}}); break;
+        case i32trunc_f64_s:   stack.apply({{valtype::f64}, {valtype::i32}}); break;
+        case i64trunc_f64_s:   stack.apply({{valtype::f64}, {valtype::i64}}); break;
+        case i32trunc_f64_u:   stack.apply({{valtype::f64}, {valtype::i32}}); break;
+        case i64trunc_f64_u:   stack.apply({{valtype::f64}, {valtype::i64}}); break;
+        case f32convert_i32_s: stack.apply({{valtype::i32}, {valtype::f32}}); break;
+        case f64convert_i32_s: stack.apply({{valtype::i32}, {valtype::f64}}); break;
+        case f32convert_i32_u: stack.apply({{valtype::i32}, {valtype::f32}}); break;
+        case f64convert_i32_u: stack.apply({{valtype::i32}, {valtype::f64}}); break;
+        case f32convert_i64_s: stack.apply({{valtype::i64}, {valtype::f32}}); break;
+        case f64convert_i64_s: stack.apply({{valtype::i64}, {valtype::f64}}); break;
+        case f32convert_i64_u: stack.apply({{valtype::i64}, {valtype::f32}}); break;
+        case f64convert_i64_u: stack.apply({{valtype::i64}, {valtype::f64}}); break;
+        case f32demote_f64:    stack.apply({{valtype::f64}, {valtype::f32}}); break;
+        case f64promote_f32:   stack.apply({{valtype::f32}, {valtype::f64}}); break;
+        case i32reinterpret_f32: stack.apply({{valtype::f32}, {valtype::i32}}); break;
+        case f32reinterpret_i32: stack.apply({{valtype::i32}, {valtype::f32}}); break;
+        case i64reinterpret_f64: stack.apply({{valtype::f64}, {valtype::i64}}); break;
+        case f64reinterpret_i64: stack.apply({{valtype::i64}, {valtype::f64}}); break;
+        case i32extend8_s:  stack.apply({{valtype::i32}, {valtype::i32}}); break;
+        case i32extend16_s: stack.apply({{valtype::i32}, {valtype::i32}}); break;
+        case i64extend8_s:  stack.apply({{valtype::i64}, {valtype::i64}}); break;
+        case i64extend16_s: stack.apply({{valtype::i64}, {valtype::i64}}); break;
+        case i64extend32_s: stack.apply({{valtype::i64}, {valtype::i64}}); break;
         case ref_null: {
             uint32_t type_idx = safe_read_leb128<uint32_t>(iter);
             ensure(is_reftype(type_idx), "type mismatch");
-            apply({{}, {static_cast<valtype>(type_idx)}});
+            stack.apply({{}, {static_cast<valtype>(type_idx)}});
             break;
         }
         case ref_is_null: {
             valtype peek = stack.back();
             ensure(peek == valtype::any || is_reftype(peek), "type mismatch");
-            apply({{peek}, {valtype::i32}});
+            stack.apply({{peek}, {valtype::i32}});
             break;
         }
         case ref_func: {
             uint32_t func_idx = safe_read_leb128<uint32_t>(iter);
             ensure(func_idx < functions.size(), "invalid function index");
             ensure(functions[func_idx].is_declared, "undeclared function reference");
-            apply({{}, {valtype::funcref}});
+            stack.apply({{}, {valtype::funcref}});
             break;
         }
         case ref_eq: {
             valtype peek = stack.back();
             ensure(peek == valtype::any || is_reftype(peek), "type mismatch");
-            apply({{peek, peek}, {valtype::i32}});
+            stack.apply({{peek, peek}, {valtype::i32}});
             break;
         }
         case multibyte: {
@@ -1525,28 +1527,28 @@ void Module::validate(safe_byte_iterator &iter, FunctionShell &fn) {
             using enum FCInstruction;
             switch (static_cast<FCInstruction>(byte)) {
                 case i32_trunc_sat_f32_s:
-                    apply({{valtype::f32}, {valtype::i32}});
+                    stack.apply({{valtype::f32}, {valtype::i32}});
                     break;
                 case i32_trunc_sat_f32_u:
-                    apply({{valtype::f32}, {valtype::i32}});
+                    stack.apply({{valtype::f32}, {valtype::i32}});
                     break;
                 case i32_trunc_sat_f64_s:
-                    apply({{valtype::f64}, {valtype::i32}});
+                    stack.apply({{valtype::f64}, {valtype::i32}});
                     break;
                 case i32_trunc_sat_f64_u:
-                    apply({{valtype::f64}, {valtype::i32}});
+                    stack.apply({{valtype::f64}, {valtype::i32}});
                     break;
                 case i64_trunc_sat_f32_s:
-                    apply({{valtype::f32}, {valtype::i64}});
+                    stack.apply({{valtype::f32}, {valtype::i64}});
                     break;
                 case i64_trunc_sat_f32_u:
-                    apply({{valtype::f32}, {valtype::i64}});
+                    stack.apply({{valtype::f32}, {valtype::i64}});
                     break;
                 case i64_trunc_sat_f64_s:
-                    apply({{valtype::f64}, {valtype::i64}});
+                    stack.apply({{valtype::f64}, {valtype::i64}});
                     break;
                 case i64_trunc_sat_f64_u:
-                    apply({{valtype::f64}, {valtype::i64}});
+                    stack.apply({{valtype::f64}, {valtype::i64}});
                     break;
                 case memory_init: {
                     uint32_t seg_idx = safe_read_leb128<uint32_t>(iter);
@@ -1558,7 +1560,7 @@ void Module::validate(safe_byte_iterator &iter, FunctionShell &fn) {
                     }
                     ensure(seg_idx < n_data, "unknown data segment");
 
-                    apply({{valtype::i32, valtype::i32, valtype::i32}, {}});
+                    stack.apply({{valtype::i32, valtype::i32, valtype::i32}, {}});
                     break;
                 }
                 case data_drop: {
@@ -1574,14 +1576,14 @@ void Module::validate(safe_byte_iterator &iter, FunctionShell &fn) {
                     if (*iter++ != 0) throw malformed_error("zero byte expected");
                     ensure(memory.exists, "unknown memory 0");
 
-                    apply({{valtype::i32, valtype::i32, valtype::i32}, {}});
+                    stack.apply({{valtype::i32, valtype::i32, valtype::i32}, {}});
                     break;
                 }
                 case memory_fill: {
                     if (*iter++ != 0) throw malformed_error("zero byte expected");
                     ensure(memory.exists, "unknown memory 0");
 
-                    apply({{valtype::i32, valtype::i32, valtype::i32}, {}});
+                    stack.apply({{valtype::i32, valtype::i32, valtype::i32}, {}});
                     break;
                 }
                 case table_init: {
@@ -1592,7 +1594,7 @@ void Module::validate(safe_byte_iterator &iter, FunctionShell &fn) {
                     ensure(seg_idx < elements.size(), "unknown data segment");
                     ensure(tables[table_idx].type == elements[seg_idx].type, "type mismatch");
 
-                    apply({{valtype::i32, valtype::i32, valtype::i32}, {}});
+                    stack.apply({{valtype::i32, valtype::i32, valtype::i32}, {}});
                     break;
                 }
                 case elem_drop: {
@@ -1607,28 +1609,28 @@ void Module::validate(safe_byte_iterator &iter, FunctionShell &fn) {
                     ensure(dst_table_idx < tables.size(), "unknown table");
                     ensure(tables[src_table_idx].type == tables[dst_table_idx].type, "type mismatch");
 
-                    apply({{valtype::i32, valtype::i32, valtype::i32}, {}});
+                    stack.apply({{valtype::i32, valtype::i32, valtype::i32}, {}});
                     break;
                 }
                 case table_grow: {
                     uint32_t table_idx = safe_read_leb128<uint32_t>(iter);
                     ensure(table_idx < tables.size(), "unknown table");
 
-                    apply({{tables[table_idx].type, valtype::i32}, {valtype::i32}});
+                    stack.apply({{tables[table_idx].type, valtype::i32}, {valtype::i32}});
                     break;
                 }
                 case table_size: {
                     uint32_t table_idx = safe_read_leb128<uint32_t>(iter);
                     ensure(table_idx < tables.size(), "unknown table");
 
-                    apply({{}, {valtype::i32}});
+                    stack.apply({{}, {valtype::i32}});
                     break;
                 }
                 case table_fill: {
                     uint32_t table_idx = safe_read_leb128<uint32_t>(iter);
                     ensure(table_idx < tables.size(), "unknown table");
 
-                    apply({{valtype::i32, tables[table_idx].type, valtype::i32}, {}});
+                    stack.apply({{valtype::i32, tables[table_idx].type, valtype::i32}, {}});
                     break;
                 }
                 default: ensure(false, "unimplemented FC extension instruction " + std::to_string(byte));
