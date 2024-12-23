@@ -1020,8 +1020,6 @@ void Module::validate(safe_byte_iterator &iter, FunctionShell &fn) {
     auto control_stack = std::vector<ControlFlow>(
         {ControlFlow(fn.type.results, fn.type, false, fn)});
 
-    // return handlers[*iter++](*this, iter, fn, stack, control_stack);
-
 #define LOAD(type, stacktype)                                                  \
     {                                                                          \
         uint32_t a = safe_read_leb128<uint32_t>(iter);                         \
