@@ -51,8 +51,10 @@ union RuntimeType {
 
     template <typename Types, typename Iter>
     static RuntimeType read_blocktype(Types &types, Iter &iter) {
+        constexpr uint8_t empty_type = 0x40;
+
         uint8_t byte = *iter;
-        if (byte == static_cast<uint8_t>(valtype::empty)) {
+        if (byte == empty_type) {
             ++iter;
             return RuntimeType{{0, 0, 0, 0, 0, 0, 0, 0, 0}};
         } else if (is_valtype(byte)) {
@@ -91,8 +93,9 @@ union RuntimeType {
             case valtype::externref:
                 type.has_externref = true;
                 break;
-            case valtype::empty:
-                throw validation_error("empty type in signature");
+            case valtype::null:
+            case valtype::any:
+                throw std::runtime_error("invalid result type");
             }
             type.hash *= 16777619;
             type.hash ^= static_cast<uint64_t>(param);
@@ -118,8 +121,9 @@ union RuntimeType {
             case valtype::externref:
                 type.has_externref = true;
                 break;
-            case valtype::empty:
-                throw validation_error("empty type in signature");
+            case valtype::null:
+            case valtype::any:
+                throw std::runtime_error("invalid result type");
             }
             type.hash *= 31;
             type.hash ^= static_cast<uint64_t>(result);
@@ -382,6 +386,28 @@ using Exports = std::unordered_map<std::string, ExportValue>;
 using ModuleImports = std::unordered_map<std::string, ExportValue>;
 using Imports = std::unordered_map<std::string, ModuleImports>;
 
+struct Block {
+    uint8_t *block_start;
+};
+
+struct Loop {};
+
+struct If {
+    uint8_t *if_start;
+};
+
+struct IfElse {
+    uint8_t *if_start;
+    uint8_t *else_start;
+};
+
+struct ControlFlow {
+    std::vector<valtype> expected;
+    Signature sig;
+    bool polymorphized;
+    std::variant<FunctionShell, Block, Loop, If, IfElse> construct;
+};
+
 // should return a shared_ptr to itself for easier lifetimes
 class Module {
     friend class Instance;
@@ -404,18 +430,12 @@ class Module {
     uint32_t n_data;
     std::vector<Segment> data_segments;
 
-    // todo: maybe split this into another class
-    FunctionShell current_fn;
-    std::vector<std::vector<valtype>> control_stack;
     // locations of if else/end instructions
     std::unordered_map<uint8_t *, IfJump> if_jumps;
     // locations of block end instructions
     std::unordered_map<uint8_t *, uint8_t *> block_ends;
 
     void validate(safe_byte_iterator &iter, FunctionShell &fn);
-
-    void validate(safe_byte_iterator &iter, const Signature &signature,
-                  bool is_func = false);
 
     void validate_const(safe_byte_iterator &iter, valtype expected);
 

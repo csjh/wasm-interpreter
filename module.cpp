@@ -2,6 +2,7 @@
 #include "instance.hpp"
 #include "spec.hpp"
 #include <limits>
+#include <variant>
 
 #ifdef WASM_DEBUG
 #include <iostream>
@@ -792,6 +793,10 @@ void Module::initialize(uint32_t length) {
                 fn.start = iter.get_with_at_least(body_length);
 
                 safe_byte_iterator fn_iter = iter;
+#ifdef WASM_DEBUG
+                std::cerr << "validating function " << &fn - functions.data()
+                          << " at " << fn_iter - bytes.get() << std::endl;
+#endif
                 validate(fn_iter, fn);
                 if (fn_iter[-1] != static_cast<uint8_t>(Instruction::end)) {
                     throw malformed_error("END opcode expected");
@@ -899,65 +904,58 @@ static inline void _ensure(bool condition, const std::string &msg) {
 
 #define ensure(condition, msg) _ensure(condition, msg)
 
-void Module::validate(safe_byte_iterator &iter, FunctionShell &fn) {
-    if (!fn.start) {
-        // skip imported functions
-        return;
-    }
-
-    current_fn = fn;
-    control_stack.push_back(fn.type.results);
-
-    validate(iter, fn.type, true);
-
-    ensure(control_stack.size() == 1,
-           "control stack not empty at end of function");
-    control_stack.clear();
-}
-
 class WasmStack : protected std::vector<valtype> {
     bool polymorphized = false;
 
-    class infinite_iterator {
-        std::vector<valtype>::const_reverse_iterator start, end;
+    auto find_diverging(const std::vector<valtype> &expected) {
+        auto ebegin = expected.rbegin();
+        auto abegin = rbegin();
 
-      public:
-        infinite_iterator(const std::vector<valtype> &vec)
-            : start(vec.rbegin()), end(vec.rend()) {}
+        for (; ebegin != expected.rend(); ++abegin, ++ebegin)
+            if (*abegin != *ebegin && *abegin != valtype::any)
+                break;
 
-        valtype operator*() const {
-            if (start == end)
-                return valtype::empty;
-            return *start;
-        }
-        infinite_iterator &operator++() {
-            if (start != end)
-                ++start;
-            return *this;
-        }
-    };
-
-    infinite_iterator rbegin() const { return infinite_iterator(*this); }
+        return abegin;
+    }
 
   public:
-    bool check(const std::vector<valtype> &expected) {
-        // this guarantees non-polymorphized stacks don't accidentally use the
-        // valtype::empty from the infinite_iterator
-        if (expected.size() > size())
-            return false;
+#ifdef WASM_DEBUG
+    auto size() { return std::vector<valtype>::size(); }
+    auto begin() { return std::vector<valtype>::begin(); }
+    auto end() { return std::vector<valtype>::end(); }
+#endif
 
-        return std::equal(
-            expected.rbegin(), expected.rend(), rbegin(),
-            [](valtype a, valtype b) { return b == valtype::empty || a == b; });
+    WasmStack() { push(valtype::null); }
+
+    bool check(const std::vector<valtype> &expected) {
+        auto diverge = find_diverging(expected);
+        if (std::distance(rbegin(), diverge) == expected.size())
+            return true;
+        return polymorphized && *diverge == valtype::null;
     }
 
     bool operator==(const std::vector<valtype> &rhs) {
-        return check(rhs) && (rhs.size() >= std::vector<valtype>::size());
+        auto diverge = find_diverging(rhs);
+        if (*diverge != valtype::null)
+            return false;
+        if (std::distance(rbegin(), diverge) == rhs.size())
+            return true;
+        return polymorphized;
     }
 
+    bool polymorphism() { return polymorphized; }
+    void set_polymorphism(bool p) { polymorphized = p; }
+
+    void unpolymorphize() { set_polymorphism(false); }
+
     void polymorphize() {
-        polymorphized = true;
-        clear();
+        set_polymorphism(true);
+
+        auto it = rbegin();
+        for (; it != rend(); ++it)
+            if (*it == valtype::null)
+                break;
+        erase(it.base(), end());
     }
 
     void push(valtype ty) { push(std::vector<valtype>{ty}); }
@@ -968,49 +966,58 @@ class WasmStack : protected std::vector<valtype> {
     void pop(const std::vector<valtype> &expected) {
         ensure(check(expected), "type mismatch");
 
-        auto materialized =
-            std::min(std::vector<valtype>::size(), expected.size());
-
-        erase(end() - materialized, end());
+        auto diverge = find_diverging(expected);
+        erase(end() - std::distance(rbegin(), diverge), end());
     }
 
     bool empty() const {
-        return !polymorphized && std::vector<valtype>::empty();
+        return !polymorphized && std::vector<valtype>::back() == valtype::null;
     }
 
     bool can_be_anything() const {
-        return polymorphized && std::vector<valtype>::empty();
+        return polymorphized && std::vector<valtype>::back() == valtype::null;
     }
 
     valtype back() const {
-        ensure(!empty(), "type mismatch");
-        return *rbegin();
-    }
-
-    unsigned long size() const {
-        return polymorphized ? static_cast<unsigned long>(-1)
-                             : std::vector<valtype>::size();
+        auto b = std::vector<valtype>::back();
+        if (b != valtype::null)
+            return b;
+        if (polymorphized) {
+            return valtype::any;
+        } else {
+            throw validation_error("type mismatch");
+        }
     }
 };
 
-void Module::validate(safe_byte_iterator &iter, const Signature &signature,
-                      bool is_func) {
-    WasmStack stack;
-    if (!is_func) {
-        stack.push(signature.params);
+void Module::validate(safe_byte_iterator &iter, FunctionShell &fn) {
+    if (!fn.start) {
+        // skip imported functions
+        return;
     }
+
+    auto stack = WasmStack();
+
+    auto control_stack = std::vector<ControlFlow>(
+        {ControlFlow(fn.type.results, fn.type, false, fn)});
 
     auto apply = [&](Signature signature) {
         stack.pop(signature.params);
         stack.push(signature.results);
     };
 
+    auto enter_flow = [&](const std::vector<valtype> &expected) {
+        stack.pop(expected);
+        stack.push(valtype::null);
+        stack.push(expected);
+    };
+
     auto check_br = [&](uint32_t depth) {
         ensure(depth < control_stack.size(), "unknown label");
         auto &expected_at_target =
             control_stack[control_stack.size() - depth - 1];
-        stack.pop(expected_at_target);
-        stack.push(expected_at_target);
+        stack.pop(expected_at_target.expected);
+        stack.push(expected_at_target.expected);
     };
 
 #define LOAD(type, stacktype)                                                  \
@@ -1055,11 +1062,17 @@ void Module::validate(safe_byte_iterator &iter, const Signature &signature,
                   << " at " << iter - bytes.get() << std::endl;
         std::cerr << "control stack size: " << control_stack.size()
                   << std::endl;
-        std::cerr << "stack size: " << stack.size() << std::endl;
         std::cerr << "control stack: ";
         for (auto &target : control_stack) {
-            std::cerr << target.size() << " ";
+            std::cerr << target.expected.size() << " ";
         }
+        std::cerr << std::endl;
+        std::cerr << "stack size: " << stack.size() << std::endl;
+        std::cerr << "stack: ";
+        for (auto &ty : stack) {
+            std::cerr << valtype_names[static_cast<uint8_t>(ty)].c_str() << " ";
+        }
+        std::cerr << std::endl;
         std::cerr << std::endl;
 #endif
 
@@ -1072,65 +1085,86 @@ void Module::validate(safe_byte_iterator &iter, const Signature &signature,
             break;
         case block: {
             auto signature = Signature::read_blocktype(types, iter);
-
-            stack.pop(signature.params);
-
             uint8_t *block_start = iter.unsafe_ptr();
 
-            control_stack.push_back(signature.results);
-            validate(iter, signature);
-            control_stack.pop_back();
-
-            block_ends[block_start] = iter.unsafe_ptr();
-
-            stack.push(signature.results);
+            enter_flow(signature.params);
+            control_stack.push_back(ControlFlow(signature.results, signature,
+                                                stack.polymorphism(),
+                                                Block(block_start)));
+            stack.unpolymorphize();
             break;
         }
         case loop: {
             auto signature = Signature::read_blocktype(types, iter);
 
-            stack.pop(signature.params);
-
-            control_stack.push_back(signature.params);
-            validate(iter, signature);
-            control_stack.pop_back();
-
-            stack.push(signature.results);
+            enter_flow(signature.params);
+            control_stack.push_back(ControlFlow(signature.params, signature,
+                                                stack.polymorphism(), Loop()));
+            stack.unpolymorphize();
             break;
         }
         case if_: {
-            stack.pop(valtype::i32);
-
             auto signature = Signature::read_blocktype(types, iter);
-
-            stack.pop(signature.params);
-            control_stack.push_back(signature.results);
-
             uint8_t *if_start = iter.unsafe_ptr();
-            validate(iter, signature);
-            uint8_t *else_start = iter.unsafe_ptr();
 
-            // validate else branch if previous instruction was else
-            if (iter[-1] == static_cast<uint8_t>(else_)) {
-                validate(iter, signature);
-            } else {
-                // if there's no else branch, params and results must match
-                ensure(signature.params == signature.results, "type mismatch");
-                // if there's no else branch, we want false to jump to the end
-                // instruction
-                else_start--;
-            }
-            control_stack.pop_back();
-            stack.push(signature.results);
-
-            if_jumps[if_start] = {else_start, iter.unsafe_ptr()};
+            stack.pop(valtype::i32);
+            enter_flow(signature.params);
+            control_stack.push_back(ControlFlow(signature.results, signature,
+                                                stack.polymorphism(),
+                                                If(if_start)));
+            stack.unpolymorphize();
             break;
         }
-        // else is basically an end to an if
-        case else_:
-        case end:
-            ensure(stack == signature.results, "type mismatch");
-            return;
+        case else_: {
+            auto [_, sig, polymorphism, construct] = control_stack.back();
+            control_stack.pop_back();
+            ensure(std::holds_alternative<If>(construct),
+                   "else must close an if");
+            ensure(stack == sig.results, "type mismatch");
+
+            stack.pop(sig.results);
+            stack.push(sig.params);
+
+            auto &if_ = std::get<If>(construct);
+            control_stack.push_back(
+                ControlFlow(sig.results, sig, polymorphism,
+                            IfElse(if_.if_start, iter.unsafe_ptr())));
+            stack.unpolymorphize();
+            break;
+        }
+        case end: {
+            ensure(control_stack.size() > 0, "control stack empty");
+
+            auto [_, sig, polymorphism, construct] = control_stack.back();
+            control_stack.pop_back();
+
+            ensure(stack == sig.results, "type mismatch stack vs. results");
+
+            if (std::holds_alternative<FunctionShell>(construct)) {
+                ensure(control_stack.size() == 0,
+                       "control stack not empty at end of function");
+                return;
+            } else if (std::holds_alternative<Block>(construct)) {
+                auto &[block_start] = std::get<Block>(construct);
+                block_ends[block_start] = iter.unsafe_ptr();
+            } else if (std::holds_alternative<Loop>(construct)) {
+                // do nothing
+            } else if (std::holds_alternative<If>(construct)) {
+                ensure(sig.params == sig.results,
+                       "type mismatch params vs. results");
+                auto &[if_start] = std::get<If>(construct);
+                if_jumps[if_start] = {iter.unsafe_ptr() - 1, iter.unsafe_ptr()};
+            } else if (std::holds_alternative<IfElse>(construct)) {
+                auto &[if_start, else_start] = std::get<IfElse>(construct);
+                if_jumps[if_start] = {else_start, iter.unsafe_ptr()};
+            }
+            stack.pop(sig.results);
+            stack.pop(valtype::null);
+
+            stack.set_polymorphism(polymorphism);
+            stack.push(sig.results);
+            break;
+        }
         case br: {
             check_br(safe_read_leb128<uint32_t>(iter));
             stack.polymorphize();
@@ -1153,9 +1187,11 @@ void Module::validate(safe_byte_iterator &iter, const Signature &signature,
                 targets.push_back(target);
             }
             auto &default_target =
-                control_stack[control_stack.size() - targets.back() - 1];
+                control_stack[control_stack.size() - targets.back() - 1]
+                    .expected;
             for (uint32_t depth : targets) {
-                auto target = control_stack[control_stack.size() - depth - 1];
+                auto target =
+                    control_stack[control_stack.size() - depth - 1].expected;
                 if (stack.can_be_anything()) {
                     ensure(stack.check(target), "type mismatch");
                     ensure(default_target.size() == target.size(),
@@ -1194,16 +1230,14 @@ void Module::validate(safe_byte_iterator &iter, const Signature &signature,
             break;
         }
         case drop:
-            ensure(!stack.empty(), "type mismatch");
             stack.pop(stack.back());
             break;
         case select: {
-            ensure(stack.size() >= 3, "type mismatch");
             // first pop the condition
             stack.pop(valtype::i32);
 
             valtype ty = stack.back();
-            ensure(ty == valtype::empty || is_numtype(ty), "type mismatch");
+            ensure(ty == valtype::any || is_numtype(ty), "type mismatch");
 
             // then apply the dynamic type
             apply({{ty, ty}, {ty}});
@@ -1215,7 +1249,6 @@ void Module::validate(safe_byte_iterator &iter, const Signature &signature,
             uint32_t maybe_valtype = *iter++;
             ensure(is_valtype(maybe_valtype), "invalid result type");
 
-            ensure(stack.size() >= 3, "type mismatch");
             // first pop the condition
             stack.pop(valtype::i32);
             valtype ty = stack.back();
@@ -1225,22 +1258,22 @@ void Module::validate(safe_byte_iterator &iter, const Signature &signature,
         }
         case localget: {
             uint32_t local_idx = safe_read_leb128<uint32_t>(iter);
-            ensure(local_idx < current_fn.locals.size(), "unknown local");
-            valtype local_ty = current_fn.locals[local_idx];
+            ensure(local_idx < fn.locals.size(), "unknown local");
+            valtype local_ty = fn.locals[local_idx];
             apply({{}, {local_ty}});
             break;
         }
         case localset: {
             uint32_t local_idx = safe_read_leb128<uint32_t>(iter);
-            ensure(local_idx < current_fn.locals.size(), "unknown local");
-            valtype local_ty = current_fn.locals[local_idx];
+            ensure(local_idx < fn.locals.size(), "unknown local");
+            valtype local_ty = fn.locals[local_idx];
             apply({{local_ty}, {}});
             break;
         }
         case localtee: {
             uint32_t local_idx = safe_read_leb128<uint32_t>(iter);
-            ensure(local_idx < current_fn.locals.size(), "unknown local");
-            valtype locaL_ty = current_fn.locals[local_idx];
+            ensure(local_idx < fn.locals.size(), "unknown local");
+            valtype locaL_ty = fn.locals[local_idx];
             apply({{locaL_ty}, {locaL_ty}});
             break;
         }
@@ -1465,7 +1498,7 @@ void Module::validate(safe_byte_iterator &iter, const Signature &signature,
         }
         case ref_is_null: {
             valtype peek = stack.back();
-            ensure(peek == valtype::empty || is_reftype(peek), "type mismatch");
+            ensure(peek == valtype::any || is_reftype(peek), "type mismatch");
             apply({{peek}, {valtype::i32}});
             break;
         }
@@ -1478,7 +1511,7 @@ void Module::validate(safe_byte_iterator &iter, const Signature &signature,
         }
         case ref_eq: {
             valtype peek = stack.back();
-            ensure(peek == valtype::empty || is_reftype(peek), "type mismatch");
+            ensure(peek == valtype::any || is_reftype(peek), "type mismatch");
             apply({{peek, peek}, {valtype::i32}});
             break;
         }

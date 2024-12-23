@@ -33,7 +33,8 @@ class uninstantiable_error : public std::runtime_error {
 };
 
 enum class valtype : uint8_t {
-    empty = 0x40,
+    null = 0x00,
+    any = 0xff,
 
     // numtype
     i32 = 0x7f,
@@ -48,6 +49,19 @@ enum class valtype : uint8_t {
     funcref = 0x70,
     externref = 0x6f,
 };
+
+#ifdef WASM_DEBUG
+static std::string valtype_names[] = {
+    [static_cast<uint8_t>(valtype::null)] = "null",
+    [static_cast<uint8_t>(valtype::any)] = "any",
+    [static_cast<uint8_t>(valtype::i32)] = "i32",
+    [static_cast<uint8_t>(valtype::i64)] = "i64",
+    [static_cast<uint8_t>(valtype::f32)] = "f32",
+    [static_cast<uint8_t>(valtype::f64)] = "f64",
+    [static_cast<uint8_t>(valtype::funcref)] = "funcref",
+    [static_cast<uint8_t>(valtype::externref)] = "externref"
+};
+#endif
 
 [[noreturn]] static inline void trap(std::string message) {
     throw trap_error(message);
@@ -87,8 +101,10 @@ struct Signature {
 
     template <typename Types, typename Iter>
     static Signature read_blocktype(Types &types, Iter &iter) {
+        constexpr uint8_t empty_type = 0x40;
+
         uint8_t byte = *iter;
-        if (byte == static_cast<uint8_t>(valtype::empty)) {
+        if (byte == empty_type) {
             ++iter;
             return {{}, {}};
         } else if (is_valtype(byte)) {
