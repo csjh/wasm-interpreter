@@ -31,7 +31,11 @@ int main(int argv, char **argc) {
     fread(bytes.get(), 1, length, file);
     fclose(file);
 
+    auto start = std::chrono::high_resolution_clock::now();
     auto module = mitey::Module::compile(std::move(bytes), length);
+    auto end = std::chrono::high_resolution_clock::now();
+    printf("Compilation/validation took %fms\n",
+           std::chrono::duration<float, std::milli>(end - start).count());
 
     mitey::FunctionInfo clock_fn({{}, {mitey::valtype::i64}},
                                  mitey::wasm_functionify<clock_ms>);
