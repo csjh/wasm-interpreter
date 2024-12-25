@@ -910,7 +910,7 @@ static inline void ensure(bool condition, const char *msg) {
 class WasmStack : protected std::vector<valtype> {
     bool polymorphized = false;
 
-    auto find_diverging(const std::vector<valtype> &expected) {
+    template <typename T> auto find_diverging(const T &expected) {
         auto ebegin = expected.rbegin();
         auto abegin = rbegin();
 
@@ -930,14 +930,14 @@ class WasmStack : protected std::vector<valtype> {
 
     WasmStack() { push(valtype::null); }
 
-    bool check(const std::vector<valtype> &expected) {
+    template <typename T> bool check(const T &expected) {
         auto diverge = find_diverging(expected);
         if (std::distance(rbegin(), diverge) == expected.size())
             return true;
         return polymorphized && *diverge == valtype::null;
     }
 
-    bool operator==(const std::vector<valtype> &rhs) {
+    template <typename T> bool operator==(const T &rhs) {
         auto diverge = find_diverging(rhs);
         if (*diverge != valtype::null)
             return false;
@@ -961,12 +961,12 @@ class WasmStack : protected std::vector<valtype> {
         erase(it.base(), end());
     }
 
-    void push(valtype ty) { push(std::vector<valtype>{ty}); }
-    void push(const std::vector<valtype> &values) {
+    void push(valtype ty) { push(std::array{ty}); }
+    template <typename T> void push(const T &values) {
         insert(end(), values.begin(), values.end());
     }
-    void pop(valtype expected_ty) { pop(std::vector<valtype>{expected_ty}); }
-    void pop(const std::vector<valtype> &expected) {
+    void pop(valtype expected_ty) { pop(std::array{expected_ty}); }
+    template <typename T> void pop(const T &expected) {
         ensure(check(expected), "type mismatch");
 
         auto diverge = find_diverging(expected);
@@ -990,6 +990,13 @@ class WasmStack : protected std::vector<valtype> {
         } else {
             error<validation_error>("type mismatch");
         }
+    }
+
+    template <size_t pc, size_t rc>
+    void apply(std::array<valtype, pc> params,
+               std::array<valtype, rc> results) {
+        pop(params);
+        push(results);
     }
 
     void apply(const Signature &signature) {
@@ -1365,134 +1372,134 @@ void Module::validate(safe_byte_iterator &iter, FunctionShell &fn) {
         case i64store8:   STORE(uint8_t,  valtype::i64);
         case i64store16:  STORE(uint16_t, valtype::i64);
         case i64store32:  STORE(uint32_t, valtype::i64);
-        case i32eqz:      stack.apply({{valtype::i32              }, {valtype::i32}}); break;
-        case i64eqz:      stack.apply({{valtype::i64              }, {valtype::i32}}); break;
-        case i32eq:       stack.apply({{valtype::i32, valtype::i32}, {valtype::i32}}); break;
-        case i64eq:       stack.apply({{valtype::i64, valtype::i64}, {valtype::i32}}); break;
-        case i32ne:       stack.apply({{valtype::i32, valtype::i32}, {valtype::i32}}); break;
-        case i64ne:       stack.apply({{valtype::i64, valtype::i64}, {valtype::i32}}); break;
-        case i32lt_s:     stack.apply({{valtype::i32, valtype::i32}, {valtype::i32}}); break;
-        case i64lt_s:     stack.apply({{valtype::i64, valtype::i64}, {valtype::i32}}); break;
-        case i32lt_u:     stack.apply({{valtype::i32, valtype::i32}, {valtype::i32}}); break;
-        case i64lt_u:     stack.apply({{valtype::i64, valtype::i64}, {valtype::i32}}); break;
-        case i32gt_s:     stack.apply({{valtype::i32, valtype::i32}, {valtype::i32}}); break;
-        case i64gt_s:     stack.apply({{valtype::i64, valtype::i64}, {valtype::i32}}); break;
-        case i32gt_u:     stack.apply({{valtype::i32, valtype::i32}, {valtype::i32}}); break;
-        case i64gt_u:     stack.apply({{valtype::i64, valtype::i64}, {valtype::i32}}); break;
-        case i32le_s:     stack.apply({{valtype::i32, valtype::i32}, {valtype::i32}}); break;
-        case i64le_s:     stack.apply({{valtype::i64, valtype::i64}, {valtype::i32}}); break;
-        case i32le_u:     stack.apply({{valtype::i32, valtype::i32}, {valtype::i32}}); break;
-        case i64le_u:     stack.apply({{valtype::i64, valtype::i64}, {valtype::i32}}); break;
-        case i32ge_s:     stack.apply({{valtype::i32, valtype::i32}, {valtype::i32}}); break;
-        case i64ge_s:     stack.apply({{valtype::i64, valtype::i64}, {valtype::i32}}); break;
-        case i32ge_u:     stack.apply({{valtype::i32, valtype::i32}, {valtype::i32}}); break;
-        case i64ge_u:     stack.apply({{valtype::i64, valtype::i64}, {valtype::i32}}); break;
-        case f32eq:       stack.apply({{valtype::f32, valtype::f32}, {valtype::i32}}); break;
-        case f64eq:       stack.apply({{valtype::f64, valtype::f64}, {valtype::i32}}); break;
-        case f32ne:       stack.apply({{valtype::f32, valtype::f32}, {valtype::i32}}); break;
-        case f64ne:       stack.apply({{valtype::f64, valtype::f64}, {valtype::i32}}); break;
-        case f32lt:       stack.apply({{valtype::f32, valtype::f32}, {valtype::i32}}); break;
-        case f64lt:       stack.apply({{valtype::f64, valtype::f64}, {valtype::i32}}); break;
-        case f32gt:       stack.apply({{valtype::f32, valtype::f32}, {valtype::i32}}); break;
-        case f64gt:       stack.apply({{valtype::f64, valtype::f64}, {valtype::i32}}); break;
-        case f32le:       stack.apply({{valtype::f32, valtype::f32}, {valtype::i32}}); break;
-        case f64le:       stack.apply({{valtype::f64, valtype::f64}, {valtype::i32}}); break;
-        case f32ge:       stack.apply({{valtype::f32, valtype::f32}, {valtype::i32}}); break;
-        case f64ge:       stack.apply({{valtype::f64, valtype::f64}, {valtype::i32}}); break;
-        case i32clz:      stack.apply({{valtype::i32              }, {valtype::i32}}); break;
-        case i64clz:      stack.apply({{valtype::i64              }, {valtype::i64}}); break;
-        case i32ctz:      stack.apply({{valtype::i32              }, {valtype::i32}}); break;
-        case i64ctz:      stack.apply({{valtype::i64              }, {valtype::i64}}); break;
-        case i32popcnt:   stack.apply({{valtype::i32              }, {valtype::i32}}); break;
-        case i64popcnt:   stack.apply({{valtype::i64              }, {valtype::i64}}); break;
-        case i32add:      stack.apply({{valtype::i32, valtype::i32}, {valtype::i32}}); break;
-        case i64add:      stack.apply({{valtype::i64, valtype::i64}, {valtype::i64}}); break;
-        case i32sub:      stack.apply({{valtype::i32, valtype::i32}, {valtype::i32}}); break;
-        case i64sub:      stack.apply({{valtype::i64, valtype::i64}, {valtype::i64}}); break;
-        case i32mul:      stack.apply({{valtype::i32, valtype::i32}, {valtype::i32}}); break;
-        case i64mul:      stack.apply({{valtype::i64, valtype::i64}, {valtype::i64}}); break;
-        case i32div_s:    stack.apply({{valtype::i32, valtype::i32}, {valtype::i32}}); break;
-        case i64div_s:    stack.apply({{valtype::i64, valtype::i64}, {valtype::i64}}); break;
-        case i32div_u:    stack.apply({{valtype::i32, valtype::i32}, {valtype::i32}}); break;
-        case i64div_u:    stack.apply({{valtype::i64, valtype::i64}, {valtype::i64}}); break;
-        case i32rem_s:    stack.apply({{valtype::i32, valtype::i32}, {valtype::i32}}); break;
-        case i64rem_s:    stack.apply({{valtype::i64, valtype::i64}, {valtype::i64}}); break;
-        case i32rem_u:    stack.apply({{valtype::i32, valtype::i32}, {valtype::i32}}); break;
-        case i64rem_u:    stack.apply({{valtype::i64, valtype::i64}, {valtype::i64}}); break;
-        case i32and:      stack.apply({{valtype::i32, valtype::i32}, {valtype::i32}}); break;
-        case i64and:      stack.apply({{valtype::i64, valtype::i64}, {valtype::i64}}); break;
-        case i32or:       stack.apply({{valtype::i32, valtype::i32}, {valtype::i32}}); break;
-        case i64or:       stack.apply({{valtype::i64, valtype::i64}, {valtype::i64}}); break;
-        case i32xor:      stack.apply({{valtype::i32, valtype::i32}, {valtype::i32}}); break;
-        case i64xor:      stack.apply({{valtype::i64, valtype::i64}, {valtype::i64}}); break;
-        case i32shl:      stack.apply({{valtype::i32, valtype::i32}, {valtype::i32}}); break;
-        case i64shl:      stack.apply({{valtype::i64, valtype::i64}, {valtype::i64}}); break;
-        case i32shr_s:    stack.apply({{valtype::i32, valtype::i32}, {valtype::i32}}); break;
-        case i64shr_s:    stack.apply({{valtype::i64, valtype::i64}, {valtype::i64}}); break;
-        case i32shr_u:    stack.apply({{valtype::i32, valtype::i32}, {valtype::i32}}); break;
-        case i64shr_u:    stack.apply({{valtype::i64, valtype::i64}, {valtype::i64}}); break;
-        case i32rotl:     stack.apply({{valtype::i32, valtype::i32}, {valtype::i32}}); break;
-        case i64rotl:     stack.apply({{valtype::i64, valtype::i64}, {valtype::i64}}); break;
-        case i32rotr:     stack.apply({{valtype::i32, valtype::i32}, {valtype::i32}}); break;
-        case i64rotr:     stack.apply({{valtype::i64, valtype::i64}, {valtype::i64}}); break;
-        case f32abs:      stack.apply({{valtype::f32              }, {valtype::f32}}); break;
-        case f64abs:      stack.apply({{valtype::f64              }, {valtype::f64}}); break;
-        case f32neg:      stack.apply({{valtype::f32              }, {valtype::f32}}); break;
-        case f64neg:      stack.apply({{valtype::f64              }, {valtype::f64}}); break;
-        case f32ceil:     stack.apply({{valtype::f32              }, {valtype::f32}}); break;
-        case f64ceil:     stack.apply({{valtype::f64              }, {valtype::f64}}); break;
-        case f32floor:    stack.apply({{valtype::f32              }, {valtype::f32}}); break;
-        case f64floor:    stack.apply({{valtype::f64              }, {valtype::f64}}); break;
-        case f32trunc:    stack.apply({{valtype::f32              }, {valtype::f32}}); break;
-        case f64trunc:    stack.apply({{valtype::f64              }, {valtype::f64}}); break;
-        case f32nearest:  stack.apply({{valtype::f32              }, {valtype::f32}}); break;
-        case f64nearest:  stack.apply({{valtype::f64              }, {valtype::f64}}); break;
-        case f32sqrt:     stack.apply({{valtype::f32              }, {valtype::f32}}); break;
-        case f64sqrt:     stack.apply({{valtype::f64              }, {valtype::f64}}); break;
-        case f32add:      stack.apply({{valtype::f32, valtype::f32}, {valtype::f32}}); break;
-        case f64add:      stack.apply({{valtype::f64, valtype::f64}, {valtype::f64}}); break;
-        case f32sub:      stack.apply({{valtype::f32, valtype::f32}, {valtype::f32}}); break;
-        case f64sub:      stack.apply({{valtype::f64, valtype::f64}, {valtype::f64}}); break;
-        case f32mul:      stack.apply({{valtype::f32, valtype::f32}, {valtype::f32}}); break;
-        case f64mul:      stack.apply({{valtype::f64, valtype::f64}, {valtype::f64}}); break;
-        case f32div:      stack.apply({{valtype::f32, valtype::f32}, {valtype::f32}}); break;
-        case f64div:      stack.apply({{valtype::f64, valtype::f64}, {valtype::f64}}); break;
-        case f32min:      stack.apply({{valtype::f32, valtype::f32}, {valtype::f32}}); break;
-        case f64min:      stack.apply({{valtype::f64, valtype::f64}, {valtype::f64}}); break;
-        case f32max:      stack.apply({{valtype::f32, valtype::f32}, {valtype::f32}}); break;
-        case f64max:      stack.apply({{valtype::f64, valtype::f64}, {valtype::f64}}); break;
-        case f32copysign: stack.apply({{valtype::f32, valtype::f32}, {valtype::f32}}); break;
-        case f64copysign: stack.apply({{valtype::f64, valtype::f64}, {valtype::f64}}); break;
-        case i32wrap_i64:      stack.apply({{valtype::i64}, {valtype::i32}}); break;
-        case i64extend_i32_s:  stack.apply({{valtype::i32}, {valtype::i64}}); break;
-        case i64extend_i32_u:  stack.apply({{valtype::i32}, {valtype::i64}}); break;
-        case i32trunc_f32_s:   stack.apply({{valtype::f32}, {valtype::i32}}); break;
-        case i64trunc_f32_s:   stack.apply({{valtype::f32}, {valtype::i64}}); break;
-        case i32trunc_f32_u:   stack.apply({{valtype::f32}, {valtype::i32}}); break;
-        case i64trunc_f32_u:   stack.apply({{valtype::f32}, {valtype::i64}}); break;
-        case i32trunc_f64_s:   stack.apply({{valtype::f64}, {valtype::i32}}); break;
-        case i64trunc_f64_s:   stack.apply({{valtype::f64}, {valtype::i64}}); break;
-        case i32trunc_f64_u:   stack.apply({{valtype::f64}, {valtype::i32}}); break;
-        case i64trunc_f64_u:   stack.apply({{valtype::f64}, {valtype::i64}}); break;
-        case f32convert_i32_s: stack.apply({{valtype::i32}, {valtype::f32}}); break;
-        case f64convert_i32_s: stack.apply({{valtype::i32}, {valtype::f64}}); break;
-        case f32convert_i32_u: stack.apply({{valtype::i32}, {valtype::f32}}); break;
-        case f64convert_i32_u: stack.apply({{valtype::i32}, {valtype::f64}}); break;
-        case f32convert_i64_s: stack.apply({{valtype::i64}, {valtype::f32}}); break;
-        case f64convert_i64_s: stack.apply({{valtype::i64}, {valtype::f64}}); break;
-        case f32convert_i64_u: stack.apply({{valtype::i64}, {valtype::f32}}); break;
-        case f64convert_i64_u: stack.apply({{valtype::i64}, {valtype::f64}}); break;
-        case f32demote_f64:    stack.apply({{valtype::f64}, {valtype::f32}}); break;
-        case f64promote_f32:   stack.apply({{valtype::f32}, {valtype::f64}}); break;
-        case i32reinterpret_f32: stack.apply({{valtype::f32}, {valtype::i32}}); break;
-        case f32reinterpret_i32: stack.apply({{valtype::i32}, {valtype::f32}}); break;
-        case i64reinterpret_f64: stack.apply({{valtype::f64}, {valtype::i64}}); break;
-        case f64reinterpret_i64: stack.apply({{valtype::i64}, {valtype::f64}}); break;
-        case i32extend8_s:  stack.apply({{valtype::i32}, {valtype::i32}}); break;
-        case i32extend16_s: stack.apply({{valtype::i32}, {valtype::i32}}); break;
-        case i64extend8_s:  stack.apply({{valtype::i64}, {valtype::i64}}); break;
-        case i64extend16_s: stack.apply({{valtype::i64}, {valtype::i64}}); break;
-        case i64extend32_s: stack.apply({{valtype::i64}, {valtype::i64}}); break;
+        case i32eqz:      stack.apply(std::array{valtype::i32              }, std::array{valtype::i32}); break;
+        case i64eqz:      stack.apply(std::array{valtype::i64              }, std::array{valtype::i32}); break;
+        case i32eq:       stack.apply(std::array{valtype::i32, valtype::i32}, std::array{valtype::i32}); break;
+        case i64eq:       stack.apply(std::array{valtype::i64, valtype::i64}, std::array{valtype::i32}); break;
+        case i32ne:       stack.apply(std::array{valtype::i32, valtype::i32}, std::array{valtype::i32}); break;
+        case i64ne:       stack.apply(std::array{valtype::i64, valtype::i64}, std::array{valtype::i32}); break;
+        case i32lt_s:     stack.apply(std::array{valtype::i32, valtype::i32}, std::array{valtype::i32}); break;
+        case i64lt_s:     stack.apply(std::array{valtype::i64, valtype::i64}, std::array{valtype::i32}); break;
+        case i32lt_u:     stack.apply(std::array{valtype::i32, valtype::i32}, std::array{valtype::i32}); break;
+        case i64lt_u:     stack.apply(std::array{valtype::i64, valtype::i64}, std::array{valtype::i32}); break;
+        case i32gt_s:     stack.apply(std::array{valtype::i32, valtype::i32}, std::array{valtype::i32}); break;
+        case i64gt_s:     stack.apply(std::array{valtype::i64, valtype::i64}, std::array{valtype::i32}); break;
+        case i32gt_u:     stack.apply(std::array{valtype::i32, valtype::i32}, std::array{valtype::i32}); break;
+        case i64gt_u:     stack.apply(std::array{valtype::i64, valtype::i64}, std::array{valtype::i32}); break;
+        case i32le_s:     stack.apply(std::array{valtype::i32, valtype::i32}, std::array{valtype::i32}); break;
+        case i64le_s:     stack.apply(std::array{valtype::i64, valtype::i64}, std::array{valtype::i32}); break;
+        case i32le_u:     stack.apply(std::array{valtype::i32, valtype::i32}, std::array{valtype::i32}); break;
+        case i64le_u:     stack.apply(std::array{valtype::i64, valtype::i64}, std::array{valtype::i32}); break;
+        case i32ge_s:     stack.apply(std::array{valtype::i32, valtype::i32}, std::array{valtype::i32}); break;
+        case i64ge_s:     stack.apply(std::array{valtype::i64, valtype::i64}, std::array{valtype::i32}); break;
+        case i32ge_u:     stack.apply(std::array{valtype::i32, valtype::i32}, std::array{valtype::i32}); break;
+        case i64ge_u:     stack.apply(std::array{valtype::i64, valtype::i64}, std::array{valtype::i32}); break;
+        case f32eq:       stack.apply(std::array{valtype::f32, valtype::f32}, std::array{valtype::i32}); break;
+        case f64eq:       stack.apply(std::array{valtype::f64, valtype::f64}, std::array{valtype::i32}); break;
+        case f32ne:       stack.apply(std::array{valtype::f32, valtype::f32}, std::array{valtype::i32}); break;
+        case f64ne:       stack.apply(std::array{valtype::f64, valtype::f64}, std::array{valtype::i32}); break;
+        case f32lt:       stack.apply(std::array{valtype::f32, valtype::f32}, std::array{valtype::i32}); break;
+        case f64lt:       stack.apply(std::array{valtype::f64, valtype::f64}, std::array{valtype::i32}); break;
+        case f32gt:       stack.apply(std::array{valtype::f32, valtype::f32}, std::array{valtype::i32}); break;
+        case f64gt:       stack.apply(std::array{valtype::f64, valtype::f64}, std::array{valtype::i32}); break;
+        case f32le:       stack.apply(std::array{valtype::f32, valtype::f32}, std::array{valtype::i32}); break;
+        case f64le:       stack.apply(std::array{valtype::f64, valtype::f64}, std::array{valtype::i32}); break;
+        case f32ge:       stack.apply(std::array{valtype::f32, valtype::f32}, std::array{valtype::i32}); break;
+        case f64ge:       stack.apply(std::array{valtype::f64, valtype::f64}, std::array{valtype::i32}); break;
+        case i32clz:      stack.apply(std::array{valtype::i32              }, std::array{valtype::i32}); break;
+        case i64clz:      stack.apply(std::array{valtype::i64              }, std::array{valtype::i64}); break;
+        case i32ctz:      stack.apply(std::array{valtype::i32              }, std::array{valtype::i32}); break;
+        case i64ctz:      stack.apply(std::array{valtype::i64              }, std::array{valtype::i64}); break;
+        case i32popcnt:   stack.apply(std::array{valtype::i32              }, std::array{valtype::i32}); break;
+        case i64popcnt:   stack.apply(std::array{valtype::i64              }, std::array{valtype::i64}); break;
+        case i32add:      stack.apply(std::array{valtype::i32, valtype::i32}, std::array{valtype::i32}); break;
+        case i64add:      stack.apply(std::array{valtype::i64, valtype::i64}, std::array{valtype::i64}); break;
+        case i32sub:      stack.apply(std::array{valtype::i32, valtype::i32}, std::array{valtype::i32}); break;
+        case i64sub:      stack.apply(std::array{valtype::i64, valtype::i64}, std::array{valtype::i64}); break;
+        case i32mul:      stack.apply(std::array{valtype::i32, valtype::i32}, std::array{valtype::i32}); break;
+        case i64mul:      stack.apply(std::array{valtype::i64, valtype::i64}, std::array{valtype::i64}); break;
+        case i32div_s:    stack.apply(std::array{valtype::i32, valtype::i32}, std::array{valtype::i32}); break;
+        case i64div_s:    stack.apply(std::array{valtype::i64, valtype::i64}, std::array{valtype::i64}); break;
+        case i32div_u:    stack.apply(std::array{valtype::i32, valtype::i32}, std::array{valtype::i32}); break;
+        case i64div_u:    stack.apply(std::array{valtype::i64, valtype::i64}, std::array{valtype::i64}); break;
+        case i32rem_s:    stack.apply(std::array{valtype::i32, valtype::i32}, std::array{valtype::i32}); break;
+        case i64rem_s:    stack.apply(std::array{valtype::i64, valtype::i64}, std::array{valtype::i64}); break;
+        case i32rem_u:    stack.apply(std::array{valtype::i32, valtype::i32}, std::array{valtype::i32}); break;
+        case i64rem_u:    stack.apply(std::array{valtype::i64, valtype::i64}, std::array{valtype::i64}); break;
+        case i32and:      stack.apply(std::array{valtype::i32, valtype::i32}, std::array{valtype::i32}); break;
+        case i64and:      stack.apply(std::array{valtype::i64, valtype::i64}, std::array{valtype::i64}); break;
+        case i32or:       stack.apply(std::array{valtype::i32, valtype::i32}, std::array{valtype::i32}); break;
+        case i64or:       stack.apply(std::array{valtype::i64, valtype::i64}, std::array{valtype::i64}); break;
+        case i32xor:      stack.apply(std::array{valtype::i32, valtype::i32}, std::array{valtype::i32}); break;
+        case i64xor:      stack.apply(std::array{valtype::i64, valtype::i64}, std::array{valtype::i64}); break;
+        case i32shl:      stack.apply(std::array{valtype::i32, valtype::i32}, std::array{valtype::i32}); break;
+        case i64shl:      stack.apply(std::array{valtype::i64, valtype::i64}, std::array{valtype::i64}); break;
+        case i32shr_s:    stack.apply(std::array{valtype::i32, valtype::i32}, std::array{valtype::i32}); break;
+        case i64shr_s:    stack.apply(std::array{valtype::i64, valtype::i64}, std::array{valtype::i64}); break;
+        case i32shr_u:    stack.apply(std::array{valtype::i32, valtype::i32}, std::array{valtype::i32}); break;
+        case i64shr_u:    stack.apply(std::array{valtype::i64, valtype::i64}, std::array{valtype::i64}); break;
+        case i32rotl:     stack.apply(std::array{valtype::i32, valtype::i32}, std::array{valtype::i32}); break;
+        case i64rotl:     stack.apply(std::array{valtype::i64, valtype::i64}, std::array{valtype::i64}); break;
+        case i32rotr:     stack.apply(std::array{valtype::i32, valtype::i32}, std::array{valtype::i32}); break;
+        case i64rotr:     stack.apply(std::array{valtype::i64, valtype::i64}, std::array{valtype::i64}); break;
+        case f32abs:      stack.apply(std::array{valtype::f32              }, std::array{valtype::f32}); break;
+        case f64abs:      stack.apply(std::array{valtype::f64              }, std::array{valtype::f64}); break;
+        case f32neg:      stack.apply(std::array{valtype::f32              }, std::array{valtype::f32}); break;
+        case f64neg:      stack.apply(std::array{valtype::f64              }, std::array{valtype::f64}); break;
+        case f32ceil:     stack.apply(std::array{valtype::f32              }, std::array{valtype::f32}); break;
+        case f64ceil:     stack.apply(std::array{valtype::f64              }, std::array{valtype::f64}); break;
+        case f32floor:    stack.apply(std::array{valtype::f32              }, std::array{valtype::f32}); break;
+        case f64floor:    stack.apply(std::array{valtype::f64              }, std::array{valtype::f64}); break;
+        case f32trunc:    stack.apply(std::array{valtype::f32              }, std::array{valtype::f32}); break;
+        case f64trunc:    stack.apply(std::array{valtype::f64              }, std::array{valtype::f64}); break;
+        case f32nearest:  stack.apply(std::array{valtype::f32              }, std::array{valtype::f32}); break;
+        case f64nearest:  stack.apply(std::array{valtype::f64              }, std::array{valtype::f64}); break;
+        case f32sqrt:     stack.apply(std::array{valtype::f32              }, std::array{valtype::f32}); break;
+        case f64sqrt:     stack.apply(std::array{valtype::f64              }, std::array{valtype::f64}); break;
+        case f32add:      stack.apply(std::array{valtype::f32, valtype::f32}, std::array{valtype::f32}); break;
+        case f64add:      stack.apply(std::array{valtype::f64, valtype::f64}, std::array{valtype::f64}); break;
+        case f32sub:      stack.apply(std::array{valtype::f32, valtype::f32}, std::array{valtype::f32}); break;
+        case f64sub:      stack.apply(std::array{valtype::f64, valtype::f64}, std::array{valtype::f64}); break;
+        case f32mul:      stack.apply(std::array{valtype::f32, valtype::f32}, std::array{valtype::f32}); break;
+        case f64mul:      stack.apply(std::array{valtype::f64, valtype::f64}, std::array{valtype::f64}); break;
+        case f32div:      stack.apply(std::array{valtype::f32, valtype::f32}, std::array{valtype::f32}); break;
+        case f64div:      stack.apply(std::array{valtype::f64, valtype::f64}, std::array{valtype::f64}); break;
+        case f32min:      stack.apply(std::array{valtype::f32, valtype::f32}, std::array{valtype::f32}); break;
+        case f64min:      stack.apply(std::array{valtype::f64, valtype::f64}, std::array{valtype::f64}); break;
+        case f32max:      stack.apply(std::array{valtype::f32, valtype::f32}, std::array{valtype::f32}); break;
+        case f64max:      stack.apply(std::array{valtype::f64, valtype::f64}, std::array{valtype::f64}); break;
+        case f32copysign: stack.apply(std::array{valtype::f32, valtype::f32}, std::array{valtype::f32}); break;
+        case f64copysign: stack.apply(std::array{valtype::f64, valtype::f64}, std::array{valtype::f64}); break;
+        case i32wrap_i64:      stack.apply(std::array{valtype::i64}, std::array{valtype::i32}); break;
+        case i64extend_i32_s:  stack.apply(std::array{valtype::i32}, std::array{valtype::i64}); break;
+        case i64extend_i32_u:  stack.apply(std::array{valtype::i32}, std::array{valtype::i64}); break;
+        case i32trunc_f32_s:   stack.apply(std::array{valtype::f32}, std::array{valtype::i32}); break;
+        case i64trunc_f32_s:   stack.apply(std::array{valtype::f32}, std::array{valtype::i64}); break;
+        case i32trunc_f32_u:   stack.apply(std::array{valtype::f32}, std::array{valtype::i32}); break;
+        case i64trunc_f32_u:   stack.apply(std::array{valtype::f32}, std::array{valtype::i64}); break;
+        case i32trunc_f64_s:   stack.apply(std::array{valtype::f64}, std::array{valtype::i32}); break;
+        case i64trunc_f64_s:   stack.apply(std::array{valtype::f64}, std::array{valtype::i64}); break;
+        case i32trunc_f64_u:   stack.apply(std::array{valtype::f64}, std::array{valtype::i32}); break;
+        case i64trunc_f64_u:   stack.apply(std::array{valtype::f64}, std::array{valtype::i64}); break;
+        case f32convert_i32_s: stack.apply(std::array{valtype::i32}, std::array{valtype::f32}); break;
+        case f64convert_i32_s: stack.apply(std::array{valtype::i32}, std::array{valtype::f64}); break;
+        case f32convert_i32_u: stack.apply(std::array{valtype::i32}, std::array{valtype::f32}); break;
+        case f64convert_i32_u: stack.apply(std::array{valtype::i32}, std::array{valtype::f64}); break;
+        case f32convert_i64_s: stack.apply(std::array{valtype::i64}, std::array{valtype::f32}); break;
+        case f64convert_i64_s: stack.apply(std::array{valtype::i64}, std::array{valtype::f64}); break;
+        case f32convert_i64_u: stack.apply(std::array{valtype::i64}, std::array{valtype::f32}); break;
+        case f64convert_i64_u: stack.apply(std::array{valtype::i64}, std::array{valtype::f64}); break;
+        case f32demote_f64:    stack.apply(std::array{valtype::f64}, std::array{valtype::f32}); break;
+        case f64promote_f32:   stack.apply(std::array{valtype::f32}, std::array{valtype::f64}); break;
+        case i32reinterpret_f32: stack.apply(std::array{valtype::f32}, std::array{valtype::i32}); break;
+        case f32reinterpret_i32: stack.apply(std::array{valtype::i32}, std::array{valtype::f32}); break;
+        case i64reinterpret_f64: stack.apply(std::array{valtype::f64}, std::array{valtype::i64}); break;
+        case f64reinterpret_i64: stack.apply(std::array{valtype::i64}, std::array{valtype::f64}); break;
+        case i32extend8_s:  stack.apply(std::array{valtype::i32}, std::array{valtype::i32}); break;
+        case i32extend16_s: stack.apply(std::array{valtype::i32}, std::array{valtype::i32}); break;
+        case i64extend8_s:  stack.apply(std::array{valtype::i64}, std::array{valtype::i64}); break;
+        case i64extend16_s: stack.apply(std::array{valtype::i64}, std::array{valtype::i64}); break;
+        case i64extend32_s: stack.apply(std::array{valtype::i64}, std::array{valtype::i64}); break;
         case ref_null: {
             uint32_t type_idx = safe_read_leb128<uint32_t>(iter);
             ensure(is_reftype(type_idx), "type mismatch");
