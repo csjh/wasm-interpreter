@@ -907,8 +907,13 @@ static inline void ensure(bool condition, const char *msg) {
     }
 }
 
-class WasmStack : protected std::vector<valtype> {
+class WasmStack {
     bool polymorphized = false;
+    std::unique_ptr<valtype[]> buffer_start;
+    valtype *buffer;
+
+    auto rbegin() const { return std::reverse_iterator(buffer); }
+    auto rend() const { return std::reverse_iterator(buffer_start.get()); }
 
     template <typename T> auto find_diverging(const T &expected) {
         auto ebegin = expected.rbegin();
@@ -923,16 +928,20 @@ class WasmStack : protected std::vector<valtype> {
 
   public:
 #ifdef WASM_DEBUG
-    auto size() { return std::vector<valtype>::size(); }
-    auto begin() { return std::vector<valtype>::begin(); }
-    auto end() { return std::vector<valtype>::end(); }
+    auto begin() { return buffer_start.get(); }
+    auto end() { return buffer; }
+    auto size() { return std::distance(begin(), end()); }
 #endif
 
-    WasmStack() { push(valtype::null); }
+    WasmStack()
+        : buffer_start((valtype *)malloc(65536)), buffer(buffer_start.get()) {
+        push(valtype::null);
+    }
 
     template <typename T> bool check(const T &expected) {
         auto diverge = find_diverging(expected);
-        if (std::distance(rbegin(), diverge) == expected.size())
+        if (static_cast<size_t>(std::distance(rbegin(), diverge)) ==
+            expected.size())
             return true;
         return polymorphized && *diverge == valtype::null;
     }
@@ -941,7 +950,7 @@ class WasmStack : protected std::vector<valtype> {
         auto diverge = find_diverging(rhs);
         if (*diverge != valtype::null)
             return false;
-        if (std::distance(rbegin(), diverge) == rhs.size())
+        if (static_cast<size_t>(std::distance(rbegin(), diverge)) == rhs.size())
             return true;
         return polymorphized;
     }
@@ -954,36 +963,30 @@ class WasmStack : protected std::vector<valtype> {
     void polymorphize() {
         set_polymorphism(true);
 
-        auto it = rbegin();
-        for (; it != rend(); ++it)
-            if (*it == valtype::null)
-                break;
-        erase(it.base(), end());
+        buffer = std::find(rbegin(), rend(), valtype::null).base();
     }
 
     void push(valtype ty) { push(std::array{ty}); }
     template <typename T> void push(const T &values) {
-        insert(end(), values.begin(), values.end());
+        std::copy(values.begin(), values.end(), buffer);
+        buffer += values.size();
     }
     void pop(valtype expected_ty) { pop(std::array{expected_ty}); }
     template <typename T> void pop(const T &expected) {
         ensure(check(expected), "type mismatch");
 
         auto diverge = find_diverging(expected);
-        erase(end() - std::distance(rbegin(), diverge), end());
+        buffer -= std::distance(rbegin(), diverge);
     }
 
-    bool empty() const {
-        return !polymorphized && std::vector<valtype>::back() == valtype::null;
-    }
+    bool empty() const { return !polymorphized && *rbegin() == valtype::null; }
 
     bool can_be_anything() const {
-        return polymorphized && std::vector<valtype>::back() == valtype::null;
+        return polymorphized && *rbegin() == valtype::null;
     }
 
     valtype back() const {
-        auto b = std::vector<valtype>::back();
-        if (b != valtype::null)
+        if (auto b = *rbegin(); b != valtype::null)
             return b;
         if (polymorphized) {
             return valtype::any;
@@ -1012,10 +1015,9 @@ class WasmStack : protected std::vector<valtype> {
 
     void check_br(std::vector<ControlFlow> &control_stack, uint32_t depth) {
         ensure(depth < control_stack.size(), "unknown label");
-        auto &expected_at_target =
-            control_stack[control_stack.size() - depth - 1];
-        pop(expected_at_target.expected);
-        push(expected_at_target.expected);
+        auto &target = control_stack[control_stack.size() - depth - 1];
+        pop(target.expected);
+        push(target.expected);
     };
 };
 
