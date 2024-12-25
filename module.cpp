@@ -9,26 +9,31 @@
 #endif
 
 namespace mitey {
+template <typename Err>
+[[noreturn]] static void __attribute__((preserve_most)) error(const char *msg) {
+    throw Err(msg);
+}
+
 safe_byte_iterator::safe_byte_iterator(uint8_t *begin, uint8_t *end)
     : iter(begin), end(end) {}
 
 uint8_t safe_byte_iterator::operator*() const {
     if (iter >= end) {
-        throw malformed_error("unexpected end");
+        error<malformed_error>("unexpected end");
     }
     return *iter;
 }
 
 uint8_t safe_byte_iterator::operator[](ssize_t n) const {
     if (iter + n >= end) {
-        throw malformed_error("unexpected end");
+        error<malformed_error>("unexpected end");
     }
     return iter[n];
 }
 
 safe_byte_iterator &safe_byte_iterator::operator++() {
     if (iter == end) {
-        throw malformed_error("unexpected end");
+        error<malformed_error>("unexpected end");
     }
     ++iter;
     return *this;
@@ -36,21 +41,21 @@ safe_byte_iterator &safe_byte_iterator::operator++() {
 
 safe_byte_iterator safe_byte_iterator::operator++(int) {
     if (iter == end) {
-        throw malformed_error("unexpected end");
+        error<malformed_error>("unexpected end");
     }
     return safe_byte_iterator(iter++, end);
 }
 
 safe_byte_iterator safe_byte_iterator::operator+(size_t n) const {
     if (iter + n > end) {
-        throw malformed_error("length out of bounds");
+        error<malformed_error>("length out of bounds");
     }
     return safe_byte_iterator(iter + n, end);
 }
 
 safe_byte_iterator &safe_byte_iterator::operator+=(size_t n) {
     if (iter + n > end) {
-        throw malformed_error("unexpected end");
+        error<malformed_error>("unexpected end");
     }
     iter += n;
     return *this;
@@ -70,7 +75,7 @@ bool safe_byte_iterator::operator<(safe_byte_iterator other) const {
 
 uint8_t *safe_byte_iterator::get_with_at_least(size_t n) const {
     if (!has_n_left(n)) {
-        throw malformed_error("length out of bounds");
+        error<malformed_error>("length out of bounds");
     }
     return iter;
 }
@@ -90,11 +95,12 @@ std::tuple<uint32_t, uint32_t> get_limits(safe_byte_iterator &iter,
 std::tuple<uint32_t, uint32_t> get_memory_limits(safe_byte_iterator &iter) {
     auto [initial, max] = get_limits(iter, Module::MAX_PAGES);
     if (initial > Module::MAX_PAGES || max > Module::MAX_PAGES) {
-        throw validation_error(
+        error<validation_error>(
             "memory size must be at most 65536 pages (4GiB)");
     }
     if (max < initial) {
-        throw validation_error("size minimum must not be greater than maximum");
+        error<validation_error>(
+            "size minimum must not be greater than maximum");
     }
     return {initial, max};
 }
@@ -103,7 +109,8 @@ std::tuple<uint32_t, uint32_t> get_table_limits(safe_byte_iterator &iter) {
     auto [initial, max] =
         get_limits(iter, std::numeric_limits<uint32_t>::max());
     if (max < initial) {
-        throw validation_error("size minimum must not be greater than maximum");
+        error<validation_error>(
+            "size minimum must not be greater than maximum");
     }
     return {initial, max};
 }
@@ -114,13 +121,13 @@ void Module::validate_const(safe_byte_iterator &iter, valtype expected) {
 #define OP(ty, op)                                                             \
     {                                                                          \
         if (stack_types.size() < 2) {                                          \
-            throw validation_error("type mismatch");                           \
+            error<validation_error>("type mismatch");                          \
         }                                                                      \
         if (stack_types[stack_types.size() - 1] != stack_types.back()) {       \
-            throw validation_error("type mismatch");                           \
+            error<validation_error>("type mismatch");                          \
         }                                                                      \
         if (stack_types.back() != valtype::ty) {                               \
-            throw validation_error("type mismatch");                           \
+            error<validation_error>("type mismatch");                          \
         }                                                                      \
         stack_types.pop_back();                                                \
         break;                                                                 \
@@ -161,11 +168,10 @@ void Module::validate_const(safe_byte_iterator &iter, valtype expected) {
         case globalget: {
             uint32_t global_idx = safe_read_leb128<uint32_t>(iter);
             if (global_idx >= globals.size() || !globals[global_idx].import) {
-                throw validation_error("unknown global " +
-                                       std::to_string(global_idx));
+                error<validation_error>("unknown global");
             }
             if (globals[global_idx].mutability != mut::const_) {
-                throw validation_error("constant expression required");
+                error<validation_error>("constant expression required");
             }
             stack_types.push_back(globals[global_idx].type);
             break;
@@ -185,7 +191,7 @@ void Module::validate_const(safe_byte_iterator &iter, valtype expected) {
         case ref_null: {
             uint32_t reftype = safe_read_leb128<uint32_t>(iter);
             if (!is_reftype(reftype)) {
-                throw validation_error("type mismatch");
+                error<validation_error>("type mismatch");
             }
             stack_types.push_back(static_cast<valtype>(reftype));
             break;
@@ -193,7 +199,7 @@ void Module::validate_const(safe_byte_iterator &iter, valtype expected) {
         case ref_func: {
             uint32_t func_idx = safe_read_leb128<uint32_t>(iter);
             if (func_idx >= functions.size()) {
-                throw validation_error("unknown function");
+                error<validation_error>("unknown function");
             }
             // implicit declaration
             functions[func_idx].is_declared = true;
@@ -202,9 +208,9 @@ void Module::validate_const(safe_byte_iterator &iter, valtype expected) {
         }
         default:
             if (is_instruction(byte)) {
-                throw validation_error("constant expression required");
+                error<validation_error>("constant expression required");
             } else {
-                throw malformed_error("illegal opcode");
+                error<malformed_error>("illegal opcode");
             }
         }
     }
@@ -214,7 +220,7 @@ void Module::validate_const(safe_byte_iterator &iter, valtype expected) {
 #undef I64_OP
 
     if (stack_types.size() != 1 || stack_types[0] != expected) {
-        throw validation_error("type mismatch");
+        error<validation_error>("type mismatch");
     }
 }
 
@@ -238,23 +244,23 @@ Module::Module(std::unique_ptr<uint8_t[]> _bytes)
 
 void Module::initialize(uint32_t length) {
     if (length < 4) {
-        throw malformed_error("unexpected end");
+        error<malformed_error>("unexpected end");
     }
 
     safe_byte_iterator iter(bytes.get(), bytes.get() + length);
 
     if (std::memcmp(reinterpret_cast<char *>(iter.get_with_at_least(4)),
                     "\0asm", 4) != 0) {
-        throw malformed_error("magic header not detected");
+        error<malformed_error>("magic header not detected");
     }
     iter += 4;
 
     if (length < 8) {
-        throw malformed_error("unexpected end");
+        error<malformed_error>("unexpected end");
     }
 
     if (*reinterpret_cast<uint32_t *>(iter.get_with_at_least(4)) != 1) {
-        throw malformed_error("unknown binary version");
+        error<malformed_error>("unknown binary version");
     }
     iter += sizeof(uint32_t);
 
@@ -267,11 +273,11 @@ void Module::initialize(uint32_t length) {
             uint32_t name_length = safe_read_leb128<uint32_t>(iter);
             if (!is_valid_utf8(iter.get_with_at_least(name_length),
                                (iter + name_length).unsafe_ptr())) {
-                throw malformed_error("malformed UTF-8 encoding");
+                error<malformed_error>("malformed UTF-8 encoding");
             }
 
             if (start + section_length < iter) {
-                throw malformed_error("unexpected end");
+                error<malformed_error>("unexpected end");
             }
 
             iter = start + section_length;
@@ -285,22 +291,22 @@ void Module::initialize(uint32_t length) {
             ++iter;
             uint32_t section_length = safe_read_leb128<uint32_t>(iter);
             if (!iter.has_n_left(section_length)) {
-                throw malformed_error("length out of bounds");
+                error<malformed_error>("length out of bounds");
             }
             safe_byte_iterator section_start = iter;
 
             body();
 
             if (iter - section_start != section_length) {
-                throw malformed_error("section size mismatch");
+                error<malformed_error>("section size mismatch");
             }
 
             // todo: remove this when validation separates
             if (!iter.empty() && *iter == id) {
-                throw malformed_error("unexpected content after last section");
+                error<malformed_error>("unexpected content after last section");
             }
         } else if (!iter.empty() && *iter > 12) {
-            throw malformed_error("malformed section id");
+            error<malformed_error>("malformed section id");
         } else {
             else_();
         }
@@ -316,12 +322,12 @@ void Module::initialize(uint32_t length) {
 
         for (uint32_t i = 0; i < n_types; ++i) {
             if (iter.empty()) {
-                throw malformed_error("unexpected end of section or function");
+                error<malformed_error>("unexpected end of section or function");
             }
 
             if (*iter != 0x60) {
-                throw malformed_error("integer representation too long");
-                // throw validation_error("invalid function type");
+                error<malformed_error>("integer representation too long");
+                // error<validation_error>("invalid function type");
             }
             ++iter;
 
@@ -331,7 +337,7 @@ void Module::initialize(uint32_t length) {
             fn.params.reserve(n_params);
             for (uint32_t j = 0; j < n_params; ++j) {
                 if (!is_valtype(iter[j])) {
-                    throw validation_error("invalid parameter type");
+                    error<validation_error>("invalid parameter type");
                 }
                 fn.params.push_back(static_cast<valtype>(iter[j]));
             }
@@ -341,7 +347,7 @@ void Module::initialize(uint32_t length) {
             fn.results.reserve(n_results);
             for (uint32_t j = 0; j < n_results; ++j) {
                 if (!is_valtype(iter[j])) {
-                    throw validation_error("invalid result type");
+                    error<validation_error>("invalid result type");
                 }
                 fn.results.push_back(static_cast<valtype>(iter[j]));
             }
@@ -361,13 +367,13 @@ void Module::initialize(uint32_t length) {
 
         for (uint32_t i = 0; i < n_imports; i++) {
             if (iter.empty()) {
-                throw malformed_error("unexpected end of section or function");
+                error<malformed_error>("unexpected end of section or function");
             }
 
             uint32_t module_len = safe_read_leb128<uint32_t>(iter);
             if (!is_valid_utf8(iter.get_with_at_least(module_len),
                                (iter + module_len).unsafe_ptr())) {
-                throw malformed_error("malformed UTF-8 encoding");
+                error<malformed_error>("malformed UTF-8 encoding");
             }
             std::string module(
                 reinterpret_cast<char *>(iter.get_with_at_least(module_len)),
@@ -377,7 +383,7 @@ void Module::initialize(uint32_t length) {
             uint32_t field_len = safe_read_leb128<uint32_t>(iter);
             if (!is_valid_utf8(iter.get_with_at_least(field_len),
                                (iter + field_len).unsafe_ptr())) {
-                throw malformed_error("malformed UTF-8 encoding");
+                error<malformed_error>("malformed UTF-8 encoding");
             }
             std::string field(
                 reinterpret_cast<char *>(iter.get_with_at_least(field_len)),
@@ -386,7 +392,7 @@ void Module::initialize(uint32_t length) {
 
             uint32_t kind = *iter++;
             if (!is_imexdesc(kind)) {
-                throw malformed_error("malformed import kind");
+                error<malformed_error>("malformed import kind");
             }
             ImExDesc desc = static_cast<ImExDesc>(kind);
             imports[module][field] = desc;
@@ -397,7 +403,7 @@ void Module::initialize(uint32_t length) {
                 // func
                 uint32_t typeidx = safe_read_leb128<uint32_t>(iter);
                 if (typeidx >= types.size()) {
-                    throw validation_error("unknown type");
+                    error<validation_error>("unknown type");
                 }
                 functions.push_back({nullptr, types[typeidx], {}, specifier});
                 n_fn_imports++;
@@ -405,7 +411,7 @@ void Module::initialize(uint32_t length) {
                 // table
                 uint32_t reftype = safe_read_leb128<uint32_t>(iter);
                 if (!is_reftype(reftype)) {
-                    throw malformed_error("malformed reference type");
+                    error<malformed_error>("malformed reference type");
                 }
 
                 auto [initial, max] = get_table_limits(iter);
@@ -414,7 +420,7 @@ void Module::initialize(uint32_t length) {
             } else if (desc == ImExDesc::mem) {
                 // mem
                 if (memory.exists) {
-                    throw validation_error("multiple memories");
+                    error<validation_error>("multiple memories");
                 }
 
                 auto [initial, max] = get_memory_limits(iter);
@@ -423,11 +429,11 @@ void Module::initialize(uint32_t length) {
                 // global
                 uint32_t maybe_valtype = safe_read_leb128<uint32_t>(iter);
                 if (!is_valtype(maybe_valtype)) {
-                    throw malformed_error("invalid global type");
+                    error<malformed_error>("invalid global type");
                 }
                 uint8_t mutability = *iter++;
                 if (!is_mut(mutability)) {
-                    throw malformed_error("malformed mutability");
+                    error<malformed_error>("malformed mutability");
                 }
 
                 globals.push_back({static_cast<valtype>(maybe_valtype),
@@ -447,12 +453,12 @@ void Module::initialize(uint32_t length) {
 
         for (uint32_t i = 0; i < n_functions; ++i) {
             if (iter.empty()) {
-                throw malformed_error("unexpected end of section or function");
+                error<malformed_error>("unexpected end of section or function");
             }
 
             uint32_t type_idx = safe_read_leb128<uint32_t>(iter);
             if (type_idx >= types.size()) {
-                throw validation_error("unknown type");
+                error<validation_error>("unknown type");
             }
             functions.push_back({nullptr, types[type_idx], {}, std::nullopt});
         }
@@ -467,12 +473,12 @@ void Module::initialize(uint32_t length) {
 
         for (uint32_t i = 0; i < n_tables; ++i) {
             if (iter.empty()) {
-                throw malformed_error("unexpected end of section or function");
+                error<malformed_error>("unexpected end of section or function");
             }
 
             uint8_t elem_type = *iter++;
             if (!is_reftype(elem_type)) {
-                throw validation_error("invalid table element type");
+                error<validation_error>("invalid table element type");
             }
 
             auto [initial, max] = get_table_limits(iter);
@@ -487,13 +493,13 @@ void Module::initialize(uint32_t length) {
     section(5, [&] {
         uint32_t n_memories = safe_read_leb128<uint32_t>(iter);
         if (n_memories > 1) {
-            throw validation_error("multiple memories");
+            error<validation_error>("multiple memories");
         } else if (n_memories == 1) {
             if (iter.empty()) {
-                throw malformed_error("unexpected end of section or function");
+                error<malformed_error>("unexpected end of section or function");
             }
             if (memory.exists) {
-                throw validation_error("multiple memories");
+                error<validation_error>("multiple memories");
             }
 
             auto [initial, max] = get_memory_limits(iter);
@@ -511,18 +517,18 @@ void Module::initialize(uint32_t length) {
 
         for (uint32_t i = 0; i < n_globals; ++i) {
             if (iter.empty()) {
-                throw malformed_error("unexpected end of section or function");
+                error<malformed_error>("unexpected end of section or function");
             }
 
             uint8_t maybe_type = *iter++;
             if (!is_valtype(maybe_type)) {
-                throw malformed_error("invalid global type");
+                error<malformed_error>("invalid global type");
             }
             valtype type = static_cast<valtype>(maybe_type);
 
             uint8_t maybe_mut = *iter++;
             if (!is_mut(maybe_mut)) {
-                throw malformed_error("malformed mutability");
+                error<malformed_error>("malformed mutability");
             }
             mut global_mut = static_cast<mut>(maybe_mut);
 
@@ -541,7 +547,7 @@ void Module::initialize(uint32_t length) {
 
         for (uint32_t i = 0; i < n_exports; ++i) {
             if (iter.empty()) {
-                throw malformed_error("unexpected end of section or function");
+                error<malformed_error>("unexpected end of section or function");
             }
 
             uint32_t name_len = safe_read_leb128<uint32_t>(iter);
@@ -552,33 +558,33 @@ void Module::initialize(uint32_t length) {
 
             uint8_t desc = *iter++;
             if (!is_imexdesc(desc)) {
-                throw validation_error("invalid export description");
+                error<validation_error>("invalid export description");
             }
             ImExDesc export_desc = static_cast<ImExDesc>(desc);
 
             uint32_t idx = safe_read_leb128<uint32_t>(iter);
 
             if (exports.contains(name)) {
-                throw validation_error("duplicate export name");
+                error<validation_error>("duplicate export name");
             }
 
             if (export_desc == ImExDesc::func) {
                 if (idx >= functions.size()) {
-                    throw validation_error("unknown function");
+                    error<validation_error>("unknown function");
                 }
                 // implicit declaration
                 functions[idx].is_declared = true;
             } else if (export_desc == ImExDesc::table) {
                 if (idx >= tables.size()) {
-                    throw validation_error("unknown table");
+                    error<validation_error>("unknown table");
                 }
             } else if (export_desc == ImExDesc::mem) {
                 if (idx != 0 || !memory.exists) {
-                    throw validation_error("unknown memory");
+                    error<validation_error>("unknown memory");
                 }
             } else if (export_desc == ImExDesc::global) {
                 if (idx >= globals.size()) {
-                    throw validation_error("unknown global");
+                    error<validation_error>("unknown global");
                 }
             }
             exports[name] = {export_desc, idx};
@@ -592,7 +598,7 @@ void Module::initialize(uint32_t length) {
         [&] {
             start = safe_read_leb128<uint32_t>(iter);
             if (start >= functions.size()) {
-                throw validation_error("unknown function");
+                error<validation_error>("unknown function");
             }
         },
         [&] { start = std::numeric_limits<uint32_t>::max(); });
@@ -608,12 +614,12 @@ void Module::initialize(uint32_t length) {
         element_start = iter.unsafe_ptr();
         for (uint32_t i = 0; i < n_elements; i++) {
             if (iter.empty()) {
-                throw malformed_error("unexpected end of section or function");
+                error<malformed_error>("unexpected end of section or function");
             }
 
             uint32_t flags = safe_read_leb128<uint32_t>(iter);
             if (flags & ~0b111) {
-                throw validation_error("invalid element flags");
+                error<validation_error>("invalid element flags");
             }
 
             if (flags & 1) {
@@ -623,7 +629,7 @@ void Module::initialize(uint32_t length) {
                         // characteristics: declarative, elem type + exprs
                         uint32_t maybe_reftype = *iter++;
                         if (!is_reftype(maybe_reftype)) {
-                            throw malformed_error("malformed reference type");
+                            error<malformed_error>("malformed reference type");
                         }
                         valtype reftype = static_cast<valtype>(maybe_reftype);
                         uint32_t n_elements = safe_read_leb128<uint32_t>(iter);
@@ -637,14 +643,14 @@ void Module::initialize(uint32_t length) {
                         // characteristics: declarative, elem kind + indices
                         uint8_t elemkind = *iter++;
                         if (elemkind != 0) {
-                            throw validation_error("invalid elemkind");
+                            error<validation_error>("invalid elemkind");
                         }
                         uint32_t n_elements = safe_read_leb128<uint32_t>(iter);
                         for (uint32_t j = 0; j < n_elements; j++) {
                             uint32_t elem_idx =
                                 safe_read_leb128<uint32_t>(iter);
                             if (elem_idx >= functions.size()) {
-                                throw validation_error("unknown function");
+                                error<validation_error>("unknown function");
                             }
                             functions[elem_idx].is_declared = true;
                         }
@@ -656,7 +662,7 @@ void Module::initialize(uint32_t length) {
                         // characteristics: passive, elem type + exprs
                         uint8_t maybe_reftype = *iter++;
                         if (!is_reftype(maybe_reftype)) {
-                            throw malformed_error("malformed reference type");
+                            error<malformed_error>("malformed reference type");
                         }
                         valtype reftype = static_cast<valtype>(maybe_reftype);
                         uint32_t n_elements = safe_read_leb128<uint32_t>(iter);
@@ -669,14 +675,14 @@ void Module::initialize(uint32_t length) {
                         // characteristics: passive, elem kind + indices
                         uint8_t elemkind = *iter++;
                         if (elemkind != 0) {
-                            throw validation_error("invalid elemkind");
+                            error<validation_error>("invalid elemkind");
                         }
                         uint32_t n_elements = safe_read_leb128<uint32_t>(iter);
                         for (uint32_t j = 0; j < n_elements; j++) {
                             uint32_t elem_idx =
                                 safe_read_leb128<uint32_t>(iter);
                             if (elem_idx >= functions.size()) {
-                                throw validation_error("unknown function");
+                                error<validation_error>("unknown function");
                             }
                             // implicit declaration
                             functions[elem_idx].is_declared = true;
@@ -688,7 +694,7 @@ void Module::initialize(uint32_t length) {
                 uint32_t table_idx =
                     flags & 0b10 ? safe_read_leb128<uint32_t>(iter) : 0;
                 if (table_idx >= tables.size()) {
-                    throw validation_error("unknown table");
+                    error<validation_error>("unknown table");
                 }
 
                 valtype reftype;
@@ -704,11 +710,11 @@ void Module::initialize(uint32_t length) {
                         reftype_or_elemkind =
                             static_cast<uint16_t>(valtype::funcref);
                     if (!is_reftype(reftype_or_elemkind)) {
-                        throw malformed_error("malformed reference type");
+                        error<malformed_error>("malformed reference type");
                     }
                     reftype = static_cast<valtype>(reftype_or_elemkind);
                     if (tables[table_idx].type != reftype) {
-                        throw validation_error("type mismatch");
+                        error<validation_error>("type mismatch");
                     }
                     for (uint32_t j = 0; j < n_elements; j++) {
                         validate_const(iter, reftype);
@@ -717,18 +723,18 @@ void Module::initialize(uint32_t length) {
                     if (reftype_or_elemkind == 256)
                         reftype_or_elemkind = 0;
                     if (reftype_or_elemkind != 0) {
-                        throw validation_error("invalid elemkind");
+                        error<validation_error>("invalid elemkind");
                     }
                     reftype = valtype::funcref;
                     if (tables[table_idx].type != reftype) {
-                        throw validation_error("type mismatch");
+                        error<validation_error>("type mismatch");
                     }
                     // flags = 0 or 2
                     // characteristics: active, elem kind + indices
                     for (uint32_t j = 0; j < n_elements; j++) {
                         uint32_t elem_idx = safe_read_leb128<uint32_t>(iter);
                         if (elem_idx >= functions.size()) {
-                            throw validation_error("unknown function");
+                            error<validation_error>("unknown function");
                         }
                         // implicit declaration
                         functions[elem_idx].is_declared = true;
@@ -758,7 +764,7 @@ void Module::initialize(uint32_t length) {
             uint32_t n_functions = safe_read_leb128<uint32_t>(iter);
 
             if (n_functions + n_fn_imports != functions.size()) {
-                throw malformed_error(
+                error<malformed_error>(
                     "function and code section have inconsistent lengths");
             }
 
@@ -780,12 +786,12 @@ void Module::initialize(uint32_t length) {
                     uint32_t n_locals = safe_read_leb128<uint32_t>(iter);
                     uint8_t type = *iter++;
                     if (!is_valtype(type)) {
-                        throw validation_error("invalid local type");
+                        error<validation_error>("invalid local type");
                     }
                     while (n_locals--) {
                         fn.locals.push_back(static_cast<valtype>(type));
                         if (fn.locals.size() > MAX_LOCALS) {
-                            throw malformed_error("too many locals");
+                            error<malformed_error>("too many locals");
                         }
                     }
                 }
@@ -799,17 +805,17 @@ void Module::initialize(uint32_t length) {
 #endif
                 validate(fn_iter, fn);
                 if (fn_iter[-1] != static_cast<uint8_t>(Instruction::end)) {
-                    throw malformed_error("END opcode expected");
+                    error<malformed_error>("END opcode expected");
                 }
                 if (fn_iter - start != function_length) {
-                    throw malformed_error("section size mismatch");
+                    error<malformed_error>("section size mismatch");
                 }
                 iter += fn_iter - iter;
             }
         },
         [&] {
             if (functions.size() != n_fn_imports) {
-                throw malformed_error(
+                error<malformed_error>(
                     "function and code section have inconsistent lengths");
             }
         });
@@ -822,27 +828,26 @@ void Module::initialize(uint32_t length) {
         [&] {
             uint32_t section_n_data = safe_read_leb128<uint32_t>(iter);
             if (has_data_count && n_data != section_n_data) {
-                throw malformed_error("data count and data section have "
-                                      "inconsistent lengths");
+                error<malformed_error>("data count and data section have "
+                                       "inconsistent lengths");
             }
 
             for (uint32_t i = 0; i < section_n_data; i++) {
                 if (iter.empty()) {
-                    throw malformed_error(
+                    error<malformed_error>(
                         "unexpected end of section or function");
                 }
 
                 uint32_t segment_flag = safe_read_leb128<uint32_t>(iter);
                 if (segment_flag & ~0b11) {
-                    throw validation_error("invalid data segment flag");
+                    error<validation_error>("invalid data segment flag");
                 }
 
                 uint32_t memidx =
                     segment_flag & 0b10 ? safe_read_leb128<uint32_t>(iter) : 0;
 
                 if (memidx != 0) {
-                    throw validation_error("unknown memory " +
-                                           std::to_string(memidx));
+                    error<validation_error>("unknown memory");
                 }
 
                 if (segment_flag & 1) {
@@ -850,7 +855,7 @@ void Module::initialize(uint32_t length) {
 
                     uint32_t data_length = safe_read_leb128<uint32_t>(iter);
                     if (!iter.has_n_left(data_length)) {
-                        throw malformed_error(
+                        error<malformed_error>(
                             "unexpected end of section or function");
                     }
                     std::span<uint8_t> data(iter.get_with_at_least(data_length),
@@ -861,14 +866,14 @@ void Module::initialize(uint32_t length) {
                 } else {
                     // active segment
                     if (!memory.exists) {
-                        throw validation_error("unknown memory 0");
+                        error<validation_error>("unknown memory 0");
                     }
 
                     uint8_t *initializer = iter.unsafe_ptr();
                     validate_const(iter, valtype::i32);
                     uint32_t data_length = safe_read_leb128<uint32_t>(iter);
                     if (!iter.has_n_left(data_length)) {
-                        throw malformed_error(
+                        error<malformed_error>(
                             "unexpected end of section or function");
                     }
 
@@ -884,25 +889,23 @@ void Module::initialize(uint32_t length) {
         },
         [&] {
             if (has_data_count && n_data != 0) {
-                throw malformed_error("data count and data section have "
-                                      "inconsistent lengths");
+                error<malformed_error>("data count and data section have "
+                                       "inconsistent lengths");
             }
         });
 
     skip_custom_section();
 
     if (!iter.empty()) {
-        throw malformed_error("unexpected content after last section");
+        error<malformed_error>("unexpected content after last section");
     }
 }
 
-static inline void _ensure(bool condition, const std::string &msg) {
+static inline void ensure(bool condition, const char *msg) {
     if (!condition) [[unlikely]] {
-        throw validation_error(msg);
+        error<validation_error>(msg);
     }
 }
-
-#define ensure(condition, msg) _ensure(condition, msg)
 
 class WasmStack : protected std::vector<valtype> {
     bool polymorphized = false;
@@ -985,7 +988,7 @@ class WasmStack : protected std::vector<valtype> {
         if (polymorphized) {
             return valtype::any;
         } else {
-            throw validation_error("type mismatch");
+            error<validation_error>("type mismatch");
         }
     }
 
@@ -1025,7 +1028,7 @@ void Module::validate(safe_byte_iterator &iter, FunctionShell &fn) {
         uint32_t a = safe_read_leb128<uint32_t>(iter);                         \
         ensure(memory.exists, "unknown memory");                               \
         if (a >= 32) {                                                         \
-            throw malformed_error("malformed memop flags");                    \
+            error<malformed_error>("malformed memop flags");                   \
         }                                                                      \
         uint32_t align = 1 << a;                                               \
         ensure(align <= sizeof(type),                                          \
@@ -1309,14 +1312,14 @@ void Module::validate(safe_byte_iterator &iter, FunctionShell &fn) {
         }
         case memorysize: {
             if (*iter++ != 0)
-                throw malformed_error("zero byte expected");
+                error<malformed_error>("zero byte expected");
             ensure(memory.exists, "unknown memory");
             stack.apply({{}, {valtype::i32}});
             break;
         }
         case memorygrow: {
             if (*iter++ != 0)
-                throw malformed_error("zero byte expected");
+                error<malformed_error>("zero byte expected");
             ensure(memory.exists, "unknown memory");
             stack.apply({{valtype::i32}, {valtype::i32}});
             break;
@@ -1550,11 +1553,11 @@ void Module::validate(safe_byte_iterator &iter, FunctionShell &fn) {
                     break;
                 case memory_init: {
                     uint32_t seg_idx = safe_read_leb128<uint32_t>(iter);
-                    if (*iter++ != 0) throw malformed_error("zero byte expected");
+                    if (*iter++ != 0) error<malformed_error>("zero byte expected");
 
                     ensure(memory.exists, "unknown memory 0");
                     if (n_data == std::numeric_limits<uint32_t>::max()) {
-                        throw malformed_error("data count section required");
+                        error<malformed_error>("data count section required");
                     }
                     ensure(seg_idx < n_data, "unknown data segment");
 
@@ -1564,21 +1567,21 @@ void Module::validate(safe_byte_iterator &iter, FunctionShell &fn) {
                 case data_drop: {
                     uint32_t seg_idx = safe_read_leb128<uint32_t>(iter);
                     if (n_data == std::numeric_limits<uint32_t>::max()) {
-                        throw malformed_error("data count section required");
+                        error<malformed_error>("data count section required");
                     }
                     ensure(seg_idx < n_data, "unknown data segment");
                     break;
                 }
                 case memory_copy: {
-                    if (*iter++ != 0) throw malformed_error("zero byte expected");
-                    if (*iter++ != 0) throw malformed_error("zero byte expected");
+                    if (*iter++ != 0) error<malformed_error>("zero byte expected");
+                    if (*iter++ != 0) error<malformed_error>("zero byte expected");
                     ensure(memory.exists, "unknown memory 0");
 
                     stack.apply({{valtype::i32, valtype::i32, valtype::i32}, {}});
                     break;
                 }
                 case memory_fill: {
-                    if (*iter++ != 0) throw malformed_error("zero byte expected");
+                    if (*iter++ != 0) error<malformed_error>("zero byte expected");
                     ensure(memory.exists, "unknown memory 0");
 
                     stack.apply({{valtype::i32, valtype::i32, valtype::i32}, {}});
@@ -1588,7 +1591,7 @@ void Module::validate(safe_byte_iterator &iter, FunctionShell &fn) {
                     uint32_t seg_idx = safe_read_leb128<uint32_t>(iter);
                     uint32_t table_idx = safe_read_leb128<uint32_t>(iter);
 
-                    ensure(table_idx < tables.size(), "unknown table " + std::to_string(table_idx));
+                    ensure(table_idx < tables.size(), "unknown table");
                     ensure(seg_idx < elements.size(), "unknown data segment");
                     ensure(tables[table_idx].type == elements[seg_idx].type, "type mismatch");
 
@@ -1597,7 +1600,7 @@ void Module::validate(safe_byte_iterator &iter, FunctionShell &fn) {
                 }
                 case elem_drop: {
                     uint32_t seg_idx = safe_read_leb128<uint32_t>(iter);
-                    ensure(seg_idx < elements.size(), "unknown elem segment " + std::to_string(seg_idx));
+                    ensure(seg_idx < elements.size(), "unknown elem segment");
                     break;
                 }
                 case table_copy: {
@@ -1631,11 +1634,11 @@ void Module::validate(safe_byte_iterator &iter, FunctionShell &fn) {
                     stack.apply({{valtype::i32, tables[table_idx].type, valtype::i32}, {}});
                     break;
                 }
-                default: ensure(false, "unimplemented FC extension instruction " + std::to_string(byte));
+                default: ensure(false, "unimplemented FC extension instruction");
             }
             break;
         }
-        default: ensure(false, "unimplemented instruction " + std::to_string(byte));
+        default: ensure(false, "unimplemented instruction");
             // clang-format on
         };
     }
