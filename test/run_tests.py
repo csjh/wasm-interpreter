@@ -30,12 +30,12 @@ for file in os.listdir("core"):
         print(result.stderr.decode("utf-8"), file=sys.stderr)
 
         try:
-            p, sp, f = result.stdout.decode("utf-8").split('\n')[-4:-1]
-            passed += int(p[len("Passes: "):])
-            soft_passed += int(sp[len("Soft passes: "):])
-            failed += int(f[len("Failures: "):])
+            p, sp, f = result.stdout.decode("utf-8").split("\n")[-4:-1]
+            passed += int(p[len("Passes: ") :])
+            soft_passed += int(sp[len("Soft passes: ") :])
+            failed += int(f[len("Failures: ") :])
         except:
-            print('failed to parse result of', file)
+            print("failed to parse result of", file)
             failed += 1
 
 print(f"Passed: {passed}, Soft passes: {soft_passed}, Failed: {failed}")
