@@ -386,6 +386,8 @@ using Exports = std::unordered_map<std::string, ExportValue>;
 using ModuleImports = std::unordered_map<std::string, ExportValue>;
 using Imports = std::unordered_map<std::string, ModuleImports>;
 
+struct Function {};
+
 struct Block {
     uint8_t *block_start;
 };
@@ -402,10 +404,10 @@ struct IfElse {
 };
 
 struct ControlFlow {
-    std::vector<valtype> expected;
-    Signature sig;
+    std::vector<valtype> &expected;
+    Signature &sig;
     bool polymorphized;
-    std::variant<FunctionShell, Block, Loop, If, IfElse> construct;
+    std::variant<Function, Block, Loop, If, IfElse> construct;
 };
 
 // should return a shared_ptr to itself for easier lifetimes

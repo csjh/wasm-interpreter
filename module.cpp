@@ -86,9 +86,9 @@ bool safe_byte_iterator::has_n_left(size_t n) const { return iter + n <= end; }
 
 std::tuple<uint32_t, uint32_t> get_limits(safe_byte_iterator &iter,
                                           uint32_t upper_limit) {
-    uint32_t flags = safe_read_leb128<uint32_t, 1>(iter);
-    uint32_t initial = safe_read_leb128<uint32_t>(iter);
-    uint32_t max = flags == 1 ? safe_read_leb128<uint32_t>(iter) : upper_limit;
+    auto flags = safe_read_leb128<uint32_t, 1>(iter);
+    auto initial = safe_read_leb128<uint32_t>(iter);
+    auto max = flags == 1 ? safe_read_leb128<uint32_t>(iter) : upper_limit;
     return {initial, max};
 }
 
@@ -136,7 +136,7 @@ void Module::validate_const(safe_byte_iterator &iter, valtype expected) {
 #define I64_OP(op) OP(i64, op)
 
     while (1) {
-        uint8_t byte = *iter++;
+        auto byte = *iter++;
 #ifdef WASM_DEBUG
         std::cerr << "reading instruction " << instructions[byte].c_str()
                   << " at " << iter - bytes.get() << std::endl;
@@ -166,7 +166,7 @@ void Module::validate_const(safe_byte_iterator &iter, valtype expected) {
             break;
         }
         case globalget: {
-            uint32_t global_idx = safe_read_leb128<uint32_t>(iter);
+            auto global_idx = safe_read_leb128<uint32_t>(iter);
             if (global_idx >= globals.size() || !globals[global_idx].import) {
                 error<validation_error>("unknown global");
             }
@@ -189,7 +189,7 @@ void Module::validate_const(safe_byte_iterator &iter, valtype expected) {
         case i64mul:
             I64_OP(*);
         case ref_null: {
-            uint32_t reftype = safe_read_leb128<uint32_t>(iter);
+            auto reftype = safe_read_leb128<uint32_t>(iter);
             if (!is_reftype(reftype)) {
                 error<validation_error>("type mismatch");
             }
@@ -197,7 +197,7 @@ void Module::validate_const(safe_byte_iterator &iter, valtype expected) {
             break;
         }
         case ref_func: {
-            uint32_t func_idx = safe_read_leb128<uint32_t>(iter);
+            auto func_idx = safe_read_leb128<uint32_t>(iter);
             if (func_idx >= functions.size()) {
                 error<validation_error>("unknown function");
             }
@@ -267,10 +267,10 @@ void Module::initialize(uint32_t length) {
     auto skip_custom_section = [&]() {
         while (!iter.empty() && *iter == 0) [[unlikely]] {
             ++iter;
-            uint32_t section_length = safe_read_leb128<uint32_t>(iter);
-            safe_byte_iterator start = iter;
+            auto section_length = safe_read_leb128<uint32_t>(iter);
+            auto start = iter;
 
-            uint32_t name_length = safe_read_leb128<uint32_t>(iter);
+            auto name_length = safe_read_leb128<uint32_t>(iter);
             if (!is_valid_utf8(iter.get_with_at_least(name_length),
                                (iter + name_length).unsafe_ptr())) {
                 error<malformed_error>("malformed UTF-8 encoding");
@@ -289,11 +289,11 @@ void Module::initialize(uint32_t length) {
                        std::function<void()> else_ = [] {}) {
         if (!iter.empty() && *iter == id) {
             ++iter;
-            uint32_t section_length = safe_read_leb128<uint32_t>(iter);
+            auto section_length = safe_read_leb128<uint32_t>(iter);
             if (!iter.has_n_left(section_length)) {
                 error<malformed_error>("length out of bounds");
             }
-            safe_byte_iterator section_start = iter;
+            auto section_start = iter;
 
             body();
 
@@ -316,7 +316,7 @@ void Module::initialize(uint32_t length) {
 
     // type section
     section(1, [&] {
-        uint32_t n_types = safe_read_leb128<uint32_t>(iter);
+        auto n_types = safe_read_leb128<uint32_t>(iter);
 
         types.reserve(n_types);
 
@@ -333,7 +333,7 @@ void Module::initialize(uint32_t length) {
 
             Signature fn{{}, {}};
 
-            uint32_t n_params = safe_read_leb128<uint32_t>(iter);
+            auto n_params = safe_read_leb128<uint32_t>(iter);
             fn.params.reserve(n_params);
             for (uint32_t j = 0; j < n_params; ++j) {
                 if (!is_valtype(iter[j])) {
@@ -343,7 +343,7 @@ void Module::initialize(uint32_t length) {
             }
             iter += n_params;
 
-            uint32_t n_results = safe_read_leb128<uint32_t>(iter);
+            auto n_results = safe_read_leb128<uint32_t>(iter);
             fn.results.reserve(n_results);
             for (uint32_t j = 0; j < n_results; ++j) {
                 if (!is_valtype(iter[j])) {
@@ -363,14 +363,14 @@ void Module::initialize(uint32_t length) {
 
     // import section
     section(2, [&] {
-        uint32_t n_imports = safe_read_leb128<uint32_t>(iter);
+        auto n_imports = safe_read_leb128<uint32_t>(iter);
 
         for (uint32_t i = 0; i < n_imports; i++) {
             if (iter.empty()) {
                 error<malformed_error>("unexpected end of section or function");
             }
 
-            uint32_t module_len = safe_read_leb128<uint32_t>(iter);
+            auto module_len = safe_read_leb128<uint32_t>(iter);
             if (!is_valid_utf8(iter.get_with_at_least(module_len),
                                (iter + module_len).unsafe_ptr())) {
                 error<malformed_error>("malformed UTF-8 encoding");
@@ -380,7 +380,7 @@ void Module::initialize(uint32_t length) {
                 module_len);
             iter += module_len;
 
-            uint32_t field_len = safe_read_leb128<uint32_t>(iter);
+            auto field_len = safe_read_leb128<uint32_t>(iter);
             if (!is_valid_utf8(iter.get_with_at_least(field_len),
                                (iter + field_len).unsafe_ptr())) {
                 error<malformed_error>("malformed UTF-8 encoding");
@@ -390,18 +390,18 @@ void Module::initialize(uint32_t length) {
                 field_len);
             iter += field_len;
 
-            uint32_t kind = *iter++;
+            auto kind = *iter++;
             if (!is_imexdesc(kind)) {
                 error<malformed_error>("malformed import kind");
             }
-            ImExDesc desc = static_cast<ImExDesc>(kind);
+            auto desc = static_cast<ImExDesc>(kind);
             imports[module][field] = desc;
 
             auto specifier = std::make_optional(std::make_pair(module, field));
 
             if (desc == ImExDesc::func) {
                 // func
-                uint32_t typeidx = safe_read_leb128<uint32_t>(iter);
+                auto typeidx = safe_read_leb128<uint32_t>(iter);
                 if (typeidx >= types.size()) {
                     error<validation_error>("unknown type");
                 }
@@ -409,7 +409,7 @@ void Module::initialize(uint32_t length) {
                 n_fn_imports++;
             } else if (desc == ImExDesc::table) {
                 // table
-                uint32_t reftype = safe_read_leb128<uint32_t>(iter);
+                auto reftype = safe_read_leb128<uint32_t>(iter);
                 if (!is_reftype(reftype)) {
                     error<malformed_error>("malformed reference type");
                 }
@@ -427,11 +427,11 @@ void Module::initialize(uint32_t length) {
                 this->memory = {initial, max, true, specifier};
             } else if (desc == ImExDesc::global) {
                 // global
-                uint32_t maybe_valtype = safe_read_leb128<uint32_t>(iter);
+                auto maybe_valtype = safe_read_leb128<uint32_t>(iter);
                 if (!is_valtype(maybe_valtype)) {
                     error<malformed_error>("invalid global type");
                 }
-                uint8_t mutability = *iter++;
+                auto mutability = *iter++;
                 if (!is_mut(mutability)) {
                     error<malformed_error>("malformed mutability");
                 }
@@ -447,7 +447,7 @@ void Module::initialize(uint32_t length) {
 
     // function type section
     section(3, [&] {
-        uint32_t n_functions = safe_read_leb128<uint32_t>(iter);
+        auto n_functions = safe_read_leb128<uint32_t>(iter);
 
         functions.reserve(n_functions);
 
@@ -456,7 +456,7 @@ void Module::initialize(uint32_t length) {
                 error<malformed_error>("unexpected end of section or function");
             }
 
-            uint32_t type_idx = safe_read_leb128<uint32_t>(iter);
+            auto type_idx = safe_read_leb128<uint32_t>(iter);
             if (type_idx >= types.size()) {
                 error<validation_error>("unknown type");
             }
@@ -468,7 +468,7 @@ void Module::initialize(uint32_t length) {
 
     // table section
     section(4, [&] {
-        uint32_t n_tables = safe_read_leb128<uint32_t>(iter);
+        auto n_tables = safe_read_leb128<uint32_t>(iter);
         tables.reserve(n_tables);
 
         for (uint32_t i = 0; i < n_tables; ++i) {
@@ -476,7 +476,7 @@ void Module::initialize(uint32_t length) {
                 error<malformed_error>("unexpected end of section or function");
             }
 
-            uint8_t elem_type = *iter++;
+            auto elem_type = *iter++;
             if (!is_reftype(elem_type)) {
                 error<validation_error>("invalid table element type");
             }
@@ -491,7 +491,7 @@ void Module::initialize(uint32_t length) {
 
     // memory section
     section(5, [&] {
-        uint32_t n_memories = safe_read_leb128<uint32_t>(iter);
+        auto n_memories = safe_read_leb128<uint32_t>(iter);
         if (n_memories > 1) {
             error<validation_error>("multiple memories");
         } else if (n_memories == 1) {
@@ -511,7 +511,7 @@ void Module::initialize(uint32_t length) {
 
     // global section
     section(6, [&] {
-        uint32_t n_globals = safe_read_leb128<uint32_t>(iter);
+        auto n_globals = safe_read_leb128<uint32_t>(iter);
 
         globals.reserve(n_globals);
 
@@ -520,17 +520,17 @@ void Module::initialize(uint32_t length) {
                 error<malformed_error>("unexpected end of section or function");
             }
 
-            uint8_t maybe_type = *iter++;
+            auto maybe_type = *iter++;
             if (!is_valtype(maybe_type)) {
                 error<malformed_error>("invalid global type");
             }
-            valtype type = static_cast<valtype>(maybe_type);
+            auto type = static_cast<valtype>(maybe_type);
 
-            uint8_t maybe_mut = *iter++;
+            auto maybe_mut = *iter++;
             if (!is_mut(maybe_mut)) {
                 error<malformed_error>("malformed mutability");
             }
-            mut global_mut = static_cast<mut>(maybe_mut);
+            auto global_mut = static_cast<mut>(maybe_mut);
 
             globals.push_back(
                 {type, global_mut, iter.unsafe_ptr(), std::nullopt});
@@ -543,26 +543,26 @@ void Module::initialize(uint32_t length) {
 
     // export section
     section(7, [&] {
-        uint32_t n_exports = safe_read_leb128<uint32_t>(iter);
+        auto n_exports = safe_read_leb128<uint32_t>(iter);
 
         for (uint32_t i = 0; i < n_exports; ++i) {
             if (iter.empty()) {
                 error<malformed_error>("unexpected end of section or function");
             }
 
-            uint32_t name_len = safe_read_leb128<uint32_t>(iter);
+            auto name_len = safe_read_leb128<uint32_t>(iter);
             std::string name(
                 reinterpret_cast<char *>(iter.get_with_at_least(name_len)),
                 name_len);
             iter += name_len;
 
-            uint8_t desc = *iter++;
+            auto desc = *iter++;
             if (!is_imexdesc(desc)) {
                 error<validation_error>("invalid export description");
             }
-            ImExDesc export_desc = static_cast<ImExDesc>(desc);
+            auto export_desc = static_cast<ImExDesc>(desc);
 
-            uint32_t idx = safe_read_leb128<uint32_t>(iter);
+            auto idx = safe_read_leb128<uint32_t>(iter);
 
             if (exports.contains(name)) {
                 error<validation_error>("duplicate export name");
@@ -607,7 +607,7 @@ void Module::initialize(uint32_t length) {
 
     // element section
     section(9, [&] {
-        uint32_t n_elements = safe_read_leb128<uint32_t>(iter);
+        auto n_elements = safe_read_leb128<uint32_t>(iter);
 
         elements.reserve(n_elements);
 
@@ -617,7 +617,7 @@ void Module::initialize(uint32_t length) {
                 error<malformed_error>("unexpected end of section or function");
             }
 
-            uint32_t flags = safe_read_leb128<uint32_t>(iter);
+            auto flags = safe_read_leb128<uint32_t>(iter);
             if (flags & ~0b111) {
                 error<validation_error>("invalid element flags");
             }
@@ -627,12 +627,12 @@ void Module::initialize(uint32_t length) {
                     if (flags & 0b100) {
                         // flags = 7
                         // characteristics: declarative, elem type + exprs
-                        uint32_t maybe_reftype = *iter++;
+                        auto maybe_reftype = *iter++;
                         if (!is_reftype(maybe_reftype)) {
                             error<malformed_error>("malformed reference type");
                         }
-                        valtype reftype = static_cast<valtype>(maybe_reftype);
-                        uint32_t n_elements = safe_read_leb128<uint32_t>(iter);
+                        auto reftype = static_cast<valtype>(maybe_reftype);
+                        auto n_elements = safe_read_leb128<uint32_t>(iter);
                         for (uint32_t j = 0; j < n_elements; j++) {
                             // validate_const sets is_declared
                             validate_const(iter, reftype);
@@ -641,11 +641,11 @@ void Module::initialize(uint32_t length) {
                     } else {
                         // flags = 3
                         // characteristics: declarative, elem kind + indices
-                        uint8_t elemkind = *iter++;
+                        auto elemkind = *iter++;
                         if (elemkind != 0) {
                             error<validation_error>("invalid elemkind");
                         }
-                        uint32_t n_elements = safe_read_leb128<uint32_t>(iter);
+                        auto n_elements = safe_read_leb128<uint32_t>(iter);
                         for (uint32_t j = 0; j < n_elements; j++) {
                             uint32_t elem_idx =
                                 safe_read_leb128<uint32_t>(iter);
@@ -660,12 +660,12 @@ void Module::initialize(uint32_t length) {
                     if (flags & 0b100) {
                         // flags = 5
                         // characteristics: passive, elem type + exprs
-                        uint8_t maybe_reftype = *iter++;
+                        auto maybe_reftype = *iter++;
                         if (!is_reftype(maybe_reftype)) {
                             error<malformed_error>("malformed reference type");
                         }
-                        valtype reftype = static_cast<valtype>(maybe_reftype);
-                        uint32_t n_elements = safe_read_leb128<uint32_t>(iter);
+                        auto reftype = static_cast<valtype>(maybe_reftype);
+                        auto n_elements = safe_read_leb128<uint32_t>(iter);
                         for (uint32_t j = 0; j < n_elements; j++) {
                             validate_const(iter, reftype);
                         }
@@ -673,11 +673,11 @@ void Module::initialize(uint32_t length) {
                     } else {
                         // flags = 1
                         // characteristics: passive, elem kind + indices
-                        uint8_t elemkind = *iter++;
+                        auto elemkind = *iter++;
                         if (elemkind != 0) {
                             error<validation_error>("invalid elemkind");
                         }
-                        uint32_t n_elements = safe_read_leb128<uint32_t>(iter);
+                        auto n_elements = safe_read_leb128<uint32_t>(iter);
                         for (uint32_t j = 0; j < n_elements; j++) {
                             uint32_t elem_idx =
                                 safe_read_leb128<uint32_t>(iter);
@@ -699,9 +699,9 @@ void Module::initialize(uint32_t length) {
 
                 valtype reftype;
 
-                /* uint32_t offset = */ validate_const(iter, valtype::i32);
-                uint16_t reftype_or_elemkind = flags & 0b10 ? *iter++ : 256;
-                uint32_t n_elements = safe_read_leb128<uint32_t>(iter);
+                /* auto offset = */ validate_const(iter, valtype::i32);
+                auto reftype_or_elemkind = flags & 0b10 ? *iter++ : 256;
+                auto n_elements = safe_read_leb128<uint32_t>(iter);
 
                 if (flags & 0b100) {
                     // flags = 4 or 6
@@ -732,7 +732,7 @@ void Module::initialize(uint32_t length) {
                     // flags = 0 or 2
                     // characteristics: active, elem kind + indices
                     for (uint32_t j = 0; j < n_elements; j++) {
-                        uint32_t elem_idx = safe_read_leb128<uint32_t>(iter);
+                        auto elem_idx = safe_read_leb128<uint32_t>(iter);
                         if (elem_idx >= functions.size()) {
                             error<validation_error>("unknown function");
                         }
@@ -749,7 +749,7 @@ void Module::initialize(uint32_t length) {
 
     // data count section
     n_data = std::numeric_limits<uint32_t>::max();
-    bool has_data_count = false;
+    auto has_data_count = false;
     section(12, [&] {
         n_data = safe_read_leb128<uint32_t>(iter);
         has_data_count = true;
@@ -761,7 +761,7 @@ void Module::initialize(uint32_t length) {
     section(
         10,
         [&] {
-            uint32_t n_functions = safe_read_leb128<uint32_t>(iter);
+            auto n_functions = safe_read_leb128<uint32_t>(iter);
 
             if (n_functions + n_fn_imports != functions.size()) {
                 error<malformed_error>(
@@ -776,15 +776,15 @@ void Module::initialize(uint32_t length) {
 
                 fn.locals = fn.type.params;
 
-                uint32_t function_length = safe_read_leb128<uint32_t>(iter);
+                auto function_length = safe_read_leb128<uint32_t>(iter);
 
-                safe_byte_iterator start(iter.unsafe_ptr(),
-                                         iter.unsafe_ptr() + function_length);
+                auto start = safe_byte_iterator(
+                    iter.unsafe_ptr(), iter.unsafe_ptr() + function_length);
 
-                uint32_t n_local_decls = safe_read_leb128<uint32_t>(iter);
+                auto n_local_decls = safe_read_leb128<uint32_t>(iter);
                 while (n_local_decls--) {
-                    uint32_t n_locals = safe_read_leb128<uint32_t>(iter);
-                    uint8_t type = *iter++;
+                    auto n_locals = safe_read_leb128<uint32_t>(iter);
+                    auto type = *iter++;
                     if (!is_valtype(type)) {
                         error<validation_error>("invalid local type");
                     }
@@ -798,7 +798,7 @@ void Module::initialize(uint32_t length) {
                 auto body_length = function_length - (iter - start);
                 fn.start = iter.get_with_at_least(body_length);
 
-                safe_byte_iterator fn_iter = iter;
+                auto fn_iter = iter;
 #ifdef WASM_DEBUG
                 std::cerr << "validating function " << &fn - functions.data()
                           << " at " << fn_iter - bytes.get() << std::endl;
@@ -826,7 +826,7 @@ void Module::initialize(uint32_t length) {
     section(
         11,
         [&] {
-            uint32_t section_n_data = safe_read_leb128<uint32_t>(iter);
+            auto section_n_data = safe_read_leb128<uint32_t>(iter);
             if (has_data_count && n_data != section_n_data) {
                 error<malformed_error>("data count and data section have "
                                        "inconsistent lengths");
@@ -838,12 +838,12 @@ void Module::initialize(uint32_t length) {
                         "unexpected end of section or function");
                 }
 
-                uint32_t segment_flag = safe_read_leb128<uint32_t>(iter);
+                auto segment_flag = safe_read_leb128<uint32_t>(iter);
                 if (segment_flag & ~0b11) {
                     error<validation_error>("invalid data segment flag");
                 }
 
-                uint32_t memidx =
+                auto memidx =
                     segment_flag & 0b10 ? safe_read_leb128<uint32_t>(iter) : 0;
 
                 if (memidx != 0) {
@@ -853,13 +853,13 @@ void Module::initialize(uint32_t length) {
                 if (segment_flag & 1) {
                     // passive segment
 
-                    uint32_t data_length = safe_read_leb128<uint32_t>(iter);
+                    auto data_length = safe_read_leb128<uint32_t>(iter);
                     if (!iter.has_n_left(data_length)) {
                         error<malformed_error>(
                             "unexpected end of section or function");
                     }
-                    std::span<uint8_t> data(iter.get_with_at_least(data_length),
-                                            data_length);
+                    auto data = std::span<uint8_t>(
+                        iter.get_with_at_least(data_length), data_length);
                     iter += data_length;
 
                     data_segments.emplace_back(Segment{memidx, data, nullptr});
@@ -869,16 +869,16 @@ void Module::initialize(uint32_t length) {
                         error<validation_error>("unknown memory 0");
                     }
 
-                    uint8_t *initializer = iter.unsafe_ptr();
+                    auto initializer = iter.unsafe_ptr();
                     validate_const(iter, valtype::i32);
-                    uint32_t data_length = safe_read_leb128<uint32_t>(iter);
+                    auto data_length = safe_read_leb128<uint32_t>(iter);
                     if (!iter.has_n_left(data_length)) {
                         error<malformed_error>(
                             "unexpected end of section or function");
                     }
 
-                    std::span<uint8_t> data(iter.get_with_at_least(data_length),
-                                            data_length);
+                    auto data = std::span<uint8_t>(
+                        iter.get_with_at_least(data_length), data_length);
                     iter += data_length;
 
                     // todo: this has to be instantiated
@@ -1030,26 +1030,26 @@ void Module::validate(safe_byte_iterator &iter, FunctionShell &fn) {
     auto stack = WasmStack();
 
     auto control_stack = std::vector<ControlFlow>(
-        {ControlFlow(fn.type.results, fn.type, false, fn)});
+        {ControlFlow(fn.type.results, fn.type, false, Function())});
 
 #define LOAD(type, stacktype)                                                  \
     {                                                                          \
-        uint32_t a = safe_read_leb128<uint32_t>(iter);                         \
+        auto a = safe_read_leb128<uint32_t>(iter);                             \
         ensure(memory.exists, "unknown memory");                               \
         if (a >= 32) {                                                         \
             error<malformed_error>("malformed memop flags");                   \
         }                                                                      \
-        uint32_t align = 1 << a;                                               \
+        auto align = 1ull << a;                                                \
         ensure(align <= sizeof(type),                                          \
                "alignment must not be larger than natural");                   \
-        /* uint32_t offset = */ safe_read_leb128<uint32_t>(iter);              \
-        stack.apply({{valtype::i32}, {stacktype}});                            \
+        /* auto offset = */ safe_read_leb128<uint32_t>(iter);                  \
+        stack.apply(std::array{valtype::i32}, std::array{stacktype});          \
         break;                                                                 \
     }
 
 #define STORE(type, stacktype)                                                 \
     {                                                                          \
-        uint32_t a = safe_read_leb128<uint32_t>(iter);                         \
+        auto a = safe_read_leb128<uint32_t>(iter);                             \
         if ((1 << 6) & a) {                                                    \
             a -= 1 << 6;                                                       \
             /* todo: test multi memory proposal */                             \
@@ -1057,17 +1057,18 @@ void Module::validate(safe_byte_iterator &iter, FunctionShell &fn) {
         } else {                                                               \
             ensure(memory.exists, "unknown memory");                           \
         }                                                                      \
-        uint32_t align = 1 << a;                                               \
+        auto align = 1ull << a;                                                \
         ensure(align <= sizeof(type),                                          \
                "alignment must not be larger than natural");                   \
-        /* uint32_t offset = */ safe_read_leb128<uint32_t>(iter);              \
-        stack.apply({{valtype::i32, stacktype}, {}});                          \
+        /* auto offset = */ safe_read_leb128<uint32_t>(iter);                  \
+        stack.apply(std::array{valtype::i32, stacktype},                       \
+                    std::array<valtype, 0>());                                 \
         break;                                                                 \
     }
 
     using enum Instruction;
     while (1) {
-        uint8_t byte = *iter++;
+        auto byte = *iter++;
 
 #ifdef WASM_DEBUG
         std::cerr << "reading instruction " << instructions[byte].c_str()
@@ -1088,7 +1089,6 @@ void Module::validate(safe_byte_iterator &iter, FunctionShell &fn) {
         std::cerr << std::endl;
 #endif
 
-        ensure(is_instruction(byte), "invalid instruction");
         switch (static_cast<Instruction>(byte)) {
         case unreachable:
             stack.polymorphize();
@@ -1096,40 +1096,39 @@ void Module::validate(safe_byte_iterator &iter, FunctionShell &fn) {
         case nop:
             break;
         case block: {
-            auto signature = Signature::read_blocktype(types, iter);
-            uint8_t *block_start = iter.unsafe_ptr();
+            auto &signature = Signature::read_blocktype(types, iter);
+            auto block_start = iter.unsafe_ptr();
 
             stack.enter_flow(signature.params);
-            control_stack.push_back(ControlFlow(signature.results, signature,
-                                                stack.polymorphism(),
-                                                Block(block_start)));
+            control_stack.emplace_back(ControlFlow(signature.results, signature,
+                                                   stack.polymorphism(),
+                                                   Block(block_start)));
             stack.unpolymorphize();
             break;
         }
         case loop: {
-            auto signature = Signature::read_blocktype(types, iter);
+            auto &signature = Signature::read_blocktype(types, iter);
 
             stack.enter_flow(signature.params);
-            control_stack.push_back(ControlFlow(signature.params, signature,
-                                                stack.polymorphism(), Loop()));
+            control_stack.emplace_back(ControlFlow(
+                signature.params, signature, stack.polymorphism(), Loop()));
             stack.unpolymorphize();
             break;
         }
         case if_: {
-            auto signature = Signature::read_blocktype(types, iter);
-            uint8_t *if_start = iter.unsafe_ptr();
+            auto &signature = Signature::read_blocktype(types, iter);
+            auto if_start = iter.unsafe_ptr();
 
             stack.pop(valtype::i32);
             stack.enter_flow(signature.params);
-            control_stack.push_back(ControlFlow(signature.results, signature,
-                                                stack.polymorphism(),
-                                                If(if_start)));
+            control_stack.emplace_back(ControlFlow(signature.results, signature,
+                                                   stack.polymorphism(),
+                                                   If(if_start)));
             stack.unpolymorphize();
             break;
         }
         case else_: {
-            auto [_, sig, polymorphism, construct] = control_stack.back();
-            control_stack.pop_back();
+            auto &[_, sig, __, construct] = control_stack.back();
             ensure(std::holds_alternative<If>(construct),
                    "else must close an if");
             ensure(stack == sig.results, "type mismatch");
@@ -1138,25 +1137,23 @@ void Module::validate(safe_byte_iterator &iter, FunctionShell &fn) {
             stack.push(sig.params);
 
             auto &if_ = std::get<If>(construct);
-            control_stack.push_back(
-                ControlFlow(sig.results, sig, polymorphism,
-                            IfElse(if_.if_start, iter.unsafe_ptr())));
+            control_stack.back().construct =
+                IfElse(if_.if_start, iter.unsafe_ptr());
             stack.unpolymorphize();
             break;
         }
         case end: {
-            ensure(control_stack.size() > 0, "control stack empty");
+            if (control_stack.size() == 1) {
+                ensure(stack == fn.type.results,
+                       "type mismatch stack vs. results");
+                return;
+            }
 
-            auto [_, sig, polymorphism, construct] = control_stack.back();
-            control_stack.pop_back();
+            auto &[_, sig, polymorphism, construct] = control_stack.back();
 
             ensure(stack == sig.results, "type mismatch stack vs. results");
 
-            if (std::holds_alternative<FunctionShell>(construct)) {
-                ensure(control_stack.size() == 0,
-                       "control stack not empty at end of function");
-                return;
-            } else if (std::holds_alternative<Block>(construct)) {
+            if (std::holds_alternative<Block>(construct)) {
                 auto &[block_start] = std::get<Block>(construct);
                 block_ends[block_start] = iter.unsafe_ptr();
             } else if (std::holds_alternative<Loop>(construct)) {
@@ -1175,6 +1172,8 @@ void Module::validate(safe_byte_iterator &iter, FunctionShell &fn) {
 
             stack.set_polymorphism(polymorphism);
             stack.push(sig.results);
+
+            control_stack.pop_back();
             break;
         }
         case br: {
@@ -1184,32 +1183,31 @@ void Module::validate(safe_byte_iterator &iter, FunctionShell &fn) {
         }
         case br_if: {
             stack.pop(valtype::i32);
-            uint32_t depth = safe_read_leb128<uint32_t>(iter);
+            auto depth = safe_read_leb128<uint32_t>(iter);
             stack.check_br(control_stack, depth);
             break;
         }
         case br_table: {
             stack.pop(valtype::i32);
-            uint32_t n_targets = safe_read_leb128<uint32_t>(iter);
+            auto n_targets = safe_read_leb128<uint32_t>(iter);
 
-            std::vector<uint32_t> targets;
+            auto targets = std::vector<uint32_t>(n_targets + 1);
             for (uint32_t i = 0; i <= n_targets; ++i) {
-                uint32_t target = safe_read_leb128<uint32_t>(iter);
+                auto target = safe_read_leb128<uint32_t>(iter);
                 ensure(target < control_stack.size(), "unknown label");
-                targets.push_back(target);
+                targets[i] = target;
             }
+            auto base = control_stack.size() - 1;
             auto &default_target =
-                control_stack[control_stack.size() - targets.back() - 1]
-                    .expected;
-            for (uint32_t depth : targets) {
-                auto target =
-                    control_stack[control_stack.size() - depth - 1].expected;
+                control_stack[base - targets[n_targets]].expected;
+            for (uint32_t i = 0; i <= n_targets; ++i) {
+                auto &target = control_stack[base - targets[i]].expected;
                 if (stack.can_be_anything()) {
                     ensure(stack.check(target), "type mismatch");
                     ensure(default_target.size() == target.size(),
                            "type mismatch");
                 } else {
-                    stack.check_br(control_stack, depth);
+                    stack.check_br(control_stack, targets[i]);
                     ensure(default_target == target, "type mismatch");
                 }
             }
@@ -1221,20 +1219,20 @@ void Module::validate(safe_byte_iterator &iter, FunctionShell &fn) {
             stack.polymorphize();
             break;
         case call: {
-            uint32_t fn_idx = safe_read_leb128<uint32_t>(iter);
+            auto fn_idx = safe_read_leb128<uint32_t>(iter);
             ensure(fn_idx < functions.size(), "unknown function");
 
-            FunctionShell &fn = functions[fn_idx];
+            auto &fn = functions[fn_idx];
             stack.apply(fn.type);
             break;
         }
         case call_indirect: {
             stack.pop(valtype::i32);
 
-            uint32_t type_idx = safe_read_leb128<uint32_t>(iter);
+            auto type_idx = safe_read_leb128<uint32_t>(iter);
             ensure(type_idx < types.size(), "unknown type");
 
-            uint32_t table_idx = safe_read_leb128<uint32_t>(iter);
+            auto table_idx = safe_read_leb128<uint32_t>(iter);
             ensure(table_idx < tables.size(), "unknown table");
             ensure(tables[table_idx].type == valtype::funcref, "type mismatch");
 
@@ -1248,70 +1246,71 @@ void Module::validate(safe_byte_iterator &iter, FunctionShell &fn) {
             // first pop the condition
             stack.pop(valtype::i32);
 
-            valtype ty = stack.back();
+            auto ty = stack.back();
             ensure(ty == valtype::any || is_numtype(ty), "type mismatch");
 
             // then apply the dynamic type
-            stack.apply({{ty, ty}, {ty}});
+            stack.apply(std::array{ty, ty}, std::array{ty});
             break;
         }
         case select_t: {
-            uint32_t n_results = safe_read_leb128<uint32_t>(iter);
+            auto n_results = safe_read_leb128<uint32_t>(iter);
             ensure(n_results == 1, "invalid result arity");
-            uint32_t maybe_valtype = *iter++;
+            auto maybe_valtype = *iter++;
             ensure(is_valtype(maybe_valtype), "invalid result type");
 
             // first pop the condition
             stack.pop(valtype::i32);
-            valtype ty = stack.back();
+            auto ty = stack.back();
             // then apply the dynamic type
-            stack.apply({{ty, ty}, {ty}});
+            stack.apply(std::array{ty, ty}, std::array{ty});
             break;
         }
         case localget: {
-            uint32_t local_idx = safe_read_leb128<uint32_t>(iter);
+            auto local_idx = safe_read_leb128<uint32_t>(iter);
             ensure(local_idx < fn.locals.size(), "unknown local");
-            valtype local_ty = fn.locals[local_idx];
-            stack.apply({{}, {local_ty}});
+            auto local_ty = fn.locals[local_idx];
+            stack.apply(std::array<valtype, 0>(), std::array{local_ty});
             break;
         }
         case localset: {
-            uint32_t local_idx = safe_read_leb128<uint32_t>(iter);
+            auto local_idx = safe_read_leb128<uint32_t>(iter);
             ensure(local_idx < fn.locals.size(), "unknown local");
-            valtype local_ty = fn.locals[local_idx];
+            auto local_ty = fn.locals[local_idx];
             stack.apply(std::array{local_ty}, std::array<valtype, 0>());
             break;
         }
         case localtee: {
-            uint32_t local_idx = safe_read_leb128<uint32_t>(iter);
+            auto local_idx = safe_read_leb128<uint32_t>(iter);
             ensure(local_idx < fn.locals.size(), "unknown local");
-            valtype locaL_ty = fn.locals[local_idx];
+            auto local_ty = fn.locals[local_idx];
             stack.apply(std::array{local_ty}, std::array{local_ty});
             break;
         }
         case tableget: {
-            uint32_t table_idx = safe_read_leb128<uint32_t>(iter);
+            auto table_idx = safe_read_leb128<uint32_t>(iter);
             ensure(table_idx < tables.size(), "unknown table");
-            valtype table_ty = tables[table_idx].type;
+            auto table_ty = tables[table_idx].type;
             stack.apply(std::array{valtype::i32}, std::array{table_ty});
             break;
         }
         case tableset: {
-            uint32_t table_idx = safe_read_leb128<uint32_t>(iter);
+            auto table_idx = safe_read_leb128<uint32_t>(iter);
             ensure(table_idx < tables.size(), "unknown table");
+            auto table_ty = tables[table_idx].type;
             stack.apply(std::array{valtype::i32, table_ty},
                         std::array<valtype, 0>());
             break;
         }
         case globalget: {
-            uint32_t global_idx = safe_read_leb128<uint32_t>(iter);
+            auto global_idx = safe_read_leb128<uint32_t>(iter);
             ensure(global_idx < globals.size(), "unknown global");
-            valtype global_ty = globals[global_idx].type;
+            auto global_ty = globals[global_idx].type;
             stack.apply(std::array<valtype, 0>(), std::array{global_ty});
             break;
         }
         case globalset: {
-            uint32_t global_idx = safe_read_leb128<uint32_t>(iter);
+            auto global_idx = safe_read_leb128<uint32_t>(iter);
             ensure(global_idx < globals.size(), "unknown global");
             ensure(globals[global_idx].mutability == mut::var,
                    "global is immutable");
@@ -1503,32 +1502,32 @@ void Module::validate(safe_byte_iterator &iter, FunctionShell &fn) {
         case i64extend16_s: stack.apply(std::array{valtype::i64}, std::array{valtype::i64}); break;
         case i64extend32_s: stack.apply(std::array{valtype::i64}, std::array{valtype::i64}); break;
         case ref_null: {
-            uint32_t type_idx = safe_read_leb128<uint32_t>(iter);
+            auto type_idx = safe_read_leb128<uint32_t>(iter);
             ensure(is_reftype(type_idx), "type mismatch");
             stack.apply(std::array<valtype, 0>(), std::array{static_cast<valtype>(type_idx)});
             break;
         }
         case ref_is_null: {
-            valtype peek = stack.back();
+            auto peek = stack.back();
             ensure(peek == valtype::any || is_reftype(peek), "type mismatch");
             stack.apply(std::array{peek}, std::array{valtype::i32});
             break;
         }
         case ref_func: {
-            uint32_t func_idx = safe_read_leb128<uint32_t>(iter);
+            auto func_idx = safe_read_leb128<uint32_t>(iter);
             ensure(func_idx < functions.size(), "invalid function index");
             ensure(functions[func_idx].is_declared, "undeclared function reference");
             stack.apply(std::array<valtype, 0>(), std::array{valtype::funcref});
             break;
         }
         case ref_eq: {
-            valtype peek = stack.back();
+            auto peek = stack.back();
             ensure(peek == valtype::any || is_reftype(peek), "type mismatch");
             stack.apply(std::array{peek, peek}, std::array{valtype::i32});
             break;
         }
         case multibyte: {
-            uint32_t byte = safe_read_leb128<uint32_t>(iter);
+            auto byte = safe_read_leb128<uint32_t>(iter);
 #if WASM_DEBUG
             std::cerr << "reading multibyte instruction " << multibyte_instructions[byte].c_str()
                       << " at " << iter - bytes.get() << std::endl;
@@ -1561,7 +1560,7 @@ void Module::validate(safe_byte_iterator &iter, FunctionShell &fn) {
                     stack.apply(std::array{valtype::f64}, std::array{valtype::i64});
                     break;
                 case memory_init: {
-                    uint32_t seg_idx = safe_read_leb128<uint32_t>(iter);
+                    auto seg_idx = safe_read_leb128<uint32_t>(iter);
                     if (*iter++ != 0) error<malformed_error>("zero byte expected");
 
                     ensure(memory.exists, "unknown memory 0");
@@ -1574,7 +1573,7 @@ void Module::validate(safe_byte_iterator &iter, FunctionShell &fn) {
                     break;
                 }
                 case data_drop: {
-                    uint32_t seg_idx = safe_read_leb128<uint32_t>(iter);
+                    auto seg_idx = safe_read_leb128<uint32_t>(iter);
                     if (n_data == std::numeric_limits<uint32_t>::max()) {
                         error<malformed_error>("data count section required");
                     }
@@ -1597,8 +1596,8 @@ void Module::validate(safe_byte_iterator &iter, FunctionShell &fn) {
                     break;
                 }
                 case table_init: {
-                    uint32_t seg_idx = safe_read_leb128<uint32_t>(iter);
-                    uint32_t table_idx = safe_read_leb128<uint32_t>(iter);
+                    auto seg_idx = safe_read_leb128<uint32_t>(iter);
+                    auto table_idx = safe_read_leb128<uint32_t>(iter);
 
                     ensure(table_idx < tables.size(), "unknown table");
                     ensure(seg_idx < elements.size(), "unknown data segment");
@@ -1608,14 +1607,14 @@ void Module::validate(safe_byte_iterator &iter, FunctionShell &fn) {
                     break;
                 }
                 case elem_drop: {
-                    uint32_t seg_idx = safe_read_leb128<uint32_t>(iter);
+                    auto seg_idx = safe_read_leb128<uint32_t>(iter);
                     ensure(seg_idx < elements.size(), "unknown elem segment");
                     break;
                 }
                 case table_copy: {
-                    uint32_t src_table_idx = safe_read_leb128<uint32_t>(iter);
+                    auto src_table_idx = safe_read_leb128<uint32_t>(iter);
                     ensure(src_table_idx < tables.size(), "unknown table");
-                    uint32_t dst_table_idx = safe_read_leb128<uint32_t>(iter);
+                    auto dst_table_idx = safe_read_leb128<uint32_t>(iter);
                     ensure(dst_table_idx < tables.size(), "unknown table");
                     ensure(tables[src_table_idx].type == tables[dst_table_idx].type, "type mismatch");
 
@@ -1623,21 +1622,21 @@ void Module::validate(safe_byte_iterator &iter, FunctionShell &fn) {
                     break;
                 }
                 case table_grow: {
-                    uint32_t table_idx = safe_read_leb128<uint32_t>(iter);
+                    auto table_idx = safe_read_leb128<uint32_t>(iter);
                     ensure(table_idx < tables.size(), "unknown table");
 
                     stack.apply(std::array{tables[table_idx].type, valtype::i32}, std::array{valtype::i32});
                     break;
                 }
                 case table_size: {
-                    uint32_t table_idx = safe_read_leb128<uint32_t>(iter);
+                    auto table_idx = safe_read_leb128<uint32_t>(iter);
                     ensure(table_idx < tables.size(), "unknown table");
 
                     stack.apply(std::array<valtype, 0>(), std::array{valtype::i32});
                     break;
                 }
                 case table_fill: {
-                    uint32_t table_idx = safe_read_leb128<uint32_t>(iter);
+                    auto table_idx = safe_read_leb128<uint32_t>(iter);
                     ensure(table_idx < tables.size(), "unknown table");
 
                     stack.apply(std::array{valtype::i32, tables[table_idx].type, valtype::i32}, std::array<valtype, 0>());
