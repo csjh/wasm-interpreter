@@ -1279,35 +1279,35 @@ void Module::validate(safe_byte_iterator &iter, FunctionShell &fn) {
             uint32_t local_idx = safe_read_leb128<uint32_t>(iter);
             ensure(local_idx < fn.locals.size(), "unknown local");
             valtype local_ty = fn.locals[local_idx];
-            stack.apply({{local_ty}, {}});
+            stack.apply(std::array{local_ty}, std::array<valtype, 0>());
             break;
         }
         case localtee: {
             uint32_t local_idx = safe_read_leb128<uint32_t>(iter);
             ensure(local_idx < fn.locals.size(), "unknown local");
             valtype locaL_ty = fn.locals[local_idx];
-            stack.apply({{locaL_ty}, {locaL_ty}});
+            stack.apply(std::array{local_ty}, std::array{local_ty});
             break;
         }
         case tableget: {
             uint32_t table_idx = safe_read_leb128<uint32_t>(iter);
             ensure(table_idx < tables.size(), "unknown table");
             valtype table_ty = tables[table_idx].type;
-            stack.apply({{valtype::i32}, {table_ty}});
+            stack.apply(std::array{valtype::i32}, std::array{table_ty});
             break;
         }
         case tableset: {
             uint32_t table_idx = safe_read_leb128<uint32_t>(iter);
             ensure(table_idx < tables.size(), "unknown table");
-            valtype table_ty = tables[table_idx].type;
-            stack.apply({{valtype::i32, table_ty}, {}});
+            stack.apply(std::array{valtype::i32, table_ty},
+                        std::array<valtype, 0>());
             break;
         }
         case globalget: {
             uint32_t global_idx = safe_read_leb128<uint32_t>(iter);
             ensure(global_idx < globals.size(), "unknown global");
             valtype global_ty = globals[global_idx].type;
-            stack.apply({{}, {global_ty}});
+            stack.apply(std::array<valtype, 0>(), std::array{global_ty});
             break;
         }
         case globalset: {
@@ -1315,40 +1315,40 @@ void Module::validate(safe_byte_iterator &iter, FunctionShell &fn) {
             ensure(global_idx < globals.size(), "unknown global");
             ensure(globals[global_idx].mutability == mut::var,
                    "global is immutable");
-            valtype global_ty = globals[global_idx].type;
-            stack.apply({{global_ty}, {}});
+            auto global_ty = globals[global_idx].type;
+            stack.apply(std::array{global_ty}, std::array<valtype, 0>());
             break;
         }
         case memorysize: {
             if (*iter++ != 0)
                 error<malformed_error>("zero byte expected");
             ensure(memory.exists, "unknown memory");
-            stack.apply({{}, {valtype::i32}});
+            stack.apply(std::array<valtype, 0>(), std::array{valtype::i32});
             break;
         }
         case memorygrow: {
             if (*iter++ != 0)
                 error<malformed_error>("zero byte expected");
             ensure(memory.exists, "unknown memory");
-            stack.apply({{valtype::i32}, {valtype::i32}});
+            stack.apply(std::array{valtype::i32}, std::array{valtype::i32});
             break;
         }
         case i32const:
             safe_read_sleb128<uint32_t>(iter);
-            stack.apply({{}, {valtype::i32}});
+            stack.apply(std::array<valtype, 0>(), std::array{valtype::i32});
             break;
         case i64const:
             safe_read_sleb128<uint64_t>(iter);
-            stack.apply({{}, {valtype::i64}});
+            stack.apply(std::array<valtype, 0>(), std::array{valtype::i64});
             break;
         case f32const: {
             iter += sizeof(float);
-            stack.apply({{}, {valtype::f32}});
+            stack.apply(std::array<valtype, 0>(), std::array{valtype::f32});
             break;
         }
         case f64const:
             iter += sizeof(double);
-            stack.apply({{}, {valtype::f64}});
+            stack.apply(std::array<valtype, 0>(), std::array{valtype::f64});
             break;
             // clang-format off
         case i32load:     LOAD(uint32_t,  valtype::i32);
@@ -1505,26 +1505,26 @@ void Module::validate(safe_byte_iterator &iter, FunctionShell &fn) {
         case ref_null: {
             uint32_t type_idx = safe_read_leb128<uint32_t>(iter);
             ensure(is_reftype(type_idx), "type mismatch");
-            stack.apply({{}, {static_cast<valtype>(type_idx)}});
+            stack.apply(std::array<valtype, 0>(), std::array{static_cast<valtype>(type_idx)});
             break;
         }
         case ref_is_null: {
             valtype peek = stack.back();
             ensure(peek == valtype::any || is_reftype(peek), "type mismatch");
-            stack.apply({{peek}, {valtype::i32}});
+            stack.apply(std::array{peek}, std::array{valtype::i32});
             break;
         }
         case ref_func: {
             uint32_t func_idx = safe_read_leb128<uint32_t>(iter);
             ensure(func_idx < functions.size(), "invalid function index");
             ensure(functions[func_idx].is_declared, "undeclared function reference");
-            stack.apply({{}, {valtype::funcref}});
+            stack.apply(std::array<valtype, 0>(), std::array{valtype::funcref});
             break;
         }
         case ref_eq: {
             valtype peek = stack.back();
             ensure(peek == valtype::any || is_reftype(peek), "type mismatch");
-            stack.apply({{peek, peek}, {valtype::i32}});
+            stack.apply(std::array{peek, peek}, std::array{valtype::i32});
             break;
         }
         case multibyte: {
@@ -1537,28 +1537,28 @@ void Module::validate(safe_byte_iterator &iter, FunctionShell &fn) {
             using enum FCInstruction;
             switch (static_cast<FCInstruction>(byte)) {
                 case i32_trunc_sat_f32_s:
-                    stack.apply({{valtype::f32}, {valtype::i32}});
+                    stack.apply(std::array{valtype::f32}, std::array{valtype::i32});
                     break;
                 case i32_trunc_sat_f32_u:
-                    stack.apply({{valtype::f32}, {valtype::i32}});
+                    stack.apply(std::array{valtype::f32}, std::array{valtype::i32});
                     break;
                 case i32_trunc_sat_f64_s:
-                    stack.apply({{valtype::f64}, {valtype::i32}});
+                    stack.apply(std::array{valtype::f64}, std::array{valtype::i32});
                     break;
                 case i32_trunc_sat_f64_u:
-                    stack.apply({{valtype::f64}, {valtype::i32}});
+                    stack.apply(std::array{valtype::f64}, std::array{valtype::i32});
                     break;
                 case i64_trunc_sat_f32_s:
-                    stack.apply({{valtype::f32}, {valtype::i64}});
+                    stack.apply(std::array{valtype::f32}, std::array{valtype::i64});
                     break;
                 case i64_trunc_sat_f32_u:
-                    stack.apply({{valtype::f32}, {valtype::i64}});
+                    stack.apply(std::array{valtype::f32}, std::array{valtype::i64});
                     break;
                 case i64_trunc_sat_f64_s:
-                    stack.apply({{valtype::f64}, {valtype::i64}});
+                    stack.apply(std::array{valtype::f64}, std::array{valtype::i64});
                     break;
                 case i64_trunc_sat_f64_u:
-                    stack.apply({{valtype::f64}, {valtype::i64}});
+                    stack.apply(std::array{valtype::f64}, std::array{valtype::i64});
                     break;
                 case memory_init: {
                     uint32_t seg_idx = safe_read_leb128<uint32_t>(iter);
@@ -1570,7 +1570,7 @@ void Module::validate(safe_byte_iterator &iter, FunctionShell &fn) {
                     }
                     ensure(seg_idx < n_data, "unknown data segment");
 
-                    stack.apply({{valtype::i32, valtype::i32, valtype::i32}, {}});
+                    stack.apply(std::array{valtype::i32, valtype::i32, valtype::i32}, std::array<valtype, 0>());
                     break;
                 }
                 case data_drop: {
@@ -1586,14 +1586,14 @@ void Module::validate(safe_byte_iterator &iter, FunctionShell &fn) {
                     if (*iter++ != 0) error<malformed_error>("zero byte expected");
                     ensure(memory.exists, "unknown memory 0");
 
-                    stack.apply({{valtype::i32, valtype::i32, valtype::i32}, {}});
+                    stack.apply(std::array{valtype::i32, valtype::i32, valtype::i32}, std::array<valtype, 0>());
                     break;
                 }
                 case memory_fill: {
                     if (*iter++ != 0) error<malformed_error>("zero byte expected");
                     ensure(memory.exists, "unknown memory 0");
 
-                    stack.apply({{valtype::i32, valtype::i32, valtype::i32}, {}});
+                    stack.apply(std::array{valtype::i32, valtype::i32, valtype::i32}, std::array<valtype, 0>());
                     break;
                 }
                 case table_init: {
@@ -1604,7 +1604,7 @@ void Module::validate(safe_byte_iterator &iter, FunctionShell &fn) {
                     ensure(seg_idx < elements.size(), "unknown data segment");
                     ensure(tables[table_idx].type == elements[seg_idx].type, "type mismatch");
 
-                    stack.apply({{valtype::i32, valtype::i32, valtype::i32}, {}});
+                    stack.apply(std::array{valtype::i32, valtype::i32, valtype::i32}, std::array<valtype, 0>());
                     break;
                 }
                 case elem_drop: {
@@ -1619,28 +1619,28 @@ void Module::validate(safe_byte_iterator &iter, FunctionShell &fn) {
                     ensure(dst_table_idx < tables.size(), "unknown table");
                     ensure(tables[src_table_idx].type == tables[dst_table_idx].type, "type mismatch");
 
-                    stack.apply({{valtype::i32, valtype::i32, valtype::i32}, {}});
+                    stack.apply(std::array{valtype::i32, valtype::i32, valtype::i32}, std::array<valtype, 0>());
                     break;
                 }
                 case table_grow: {
                     uint32_t table_idx = safe_read_leb128<uint32_t>(iter);
                     ensure(table_idx < tables.size(), "unknown table");
 
-                    stack.apply({{tables[table_idx].type, valtype::i32}, {valtype::i32}});
+                    stack.apply(std::array{tables[table_idx].type, valtype::i32}, std::array{valtype::i32});
                     break;
                 }
                 case table_size: {
                     uint32_t table_idx = safe_read_leb128<uint32_t>(iter);
                     ensure(table_idx < tables.size(), "unknown table");
 
-                    stack.apply({{}, {valtype::i32}});
+                    stack.apply(std::array<valtype, 0>(), std::array{valtype::i32});
                     break;
                 }
                 case table_fill: {
                     uint32_t table_idx = safe_read_leb128<uint32_t>(iter);
                     ensure(table_idx < tables.size(), "unknown table");
 
-                    stack.apply({{valtype::i32, tables[table_idx].type, valtype::i32}, {}});
+                    stack.apply(std::array{valtype::i32, tables[table_idx].type, valtype::i32}, std::array<valtype, 0>());
                     break;
                 }
                 default: ensure(false, "unimplemented FC extension instruction");

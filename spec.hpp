@@ -59,8 +59,7 @@ static std::string valtype_names[] = {
     [static_cast<uint8_t>(valtype::f32)] = "f32",
     [static_cast<uint8_t>(valtype::f64)] = "f64",
     [static_cast<uint8_t>(valtype::funcref)] = "funcref",
-    [static_cast<uint8_t>(valtype::externref)] = "externref"
-};
+    [static_cast<uint8_t>(valtype::externref)] = "externref"};
 #endif
 
 [[noreturn]] static inline void trap(std::string message) {
@@ -100,16 +99,22 @@ struct Signature {
     std::vector<valtype> results;
 
     template <typename Types, typename Iter>
-    static Signature read_blocktype(Types &types, Iter &iter) {
+    static Signature &read_blocktype(Types &types, Iter &iter) {
         constexpr uint8_t empty_type = 0x40;
+        static Signature singles[] = {
+            [0x40] = {{}, {}},
+            [0x7f] = {{}, {valtype::i32}},
+            [0x7e] = {{}, {valtype::i64}},
+            [0x7d] = {{}, {valtype::f32}},
+            [0x7c] = {{}, {valtype::f64}},
+            [0x70] = {{}, {valtype::funcref}},
+            [0x6f] = {{}, {valtype::externref}},
+        };
 
         uint8_t byte = *iter;
-        if (byte == empty_type) {
+        if (byte == empty_type || is_valtype(byte)) {
             ++iter;
-            return {{}, {}};
-        } else if (is_valtype(byte)) {
-            ++iter;
-            return {{}, {static_cast<valtype>(byte)}};
+            return singles[byte];
         } else {
             int64_t n = safe_read_sleb128<int64_t, 33>(iter);
             return types[n];
