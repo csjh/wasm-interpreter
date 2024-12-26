@@ -909,11 +909,13 @@ static inline void ensure(bool condition, const char *msg) {
 
 class WasmStack {
     bool polymorphized = false;
-    std::unique_ptr<valtype[]> buffer_start;
+    valtype buffer_start[65536];
     valtype *buffer;
 
     auto rbegin() const { return std::reverse_iterator(buffer); }
-    auto rend() const { return std::reverse_iterator(buffer_start.get()); }
+    auto rend() const {
+        return std::reverse_iterator(const_cast<valtype *>(buffer_start));
+    }
 
     template <typename T> auto find_diverging(const T &expected) {
         auto ebegin = expected.rbegin();
@@ -928,15 +930,12 @@ class WasmStack {
 
   public:
 #ifdef WASM_DEBUG
-    auto begin() { return buffer_start.get(); }
+    auto begin() { return buffer_start; }
     auto end() { return buffer; }
     auto size() { return std::distance(begin(), end()); }
 #endif
 
-    WasmStack()
-        : buffer_start((valtype *)malloc(65536)), buffer(buffer_start.get()) {
-        push(valtype::null);
-    }
+    WasmStack() : buffer(buffer_start) { push(valtype::null); }
 
     template <typename T> bool check(const T &expected) {
         auto diverge = find_diverging(expected);
