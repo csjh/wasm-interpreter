@@ -1020,6 +1020,663 @@ class WasmStack {
     };
 };
 
+#define LOAD(type, stacktype)                                                  \
+    {                                                                          \
+        auto a = safe_read_leb128<uint32_t>(iter);                             \
+        ensure(mod.memory.exists, "unknown memory");                           \
+        if (a >= 32) {                                                         \
+            error<malformed_error>("malformed memop flags");                   \
+        }                                                                      \
+        auto align = 1ull << a;                                                \
+        ensure(align <= sizeof(type),                                          \
+               "alignment must not be larger than natural");                   \
+        /* auto offset = */ safe_read_leb128<uint32_t>(iter);                  \
+        stack.apply(std::array{valtype::i32}, std::array{stacktype});          \
+        nextop();                                                              \
+    }
+
+#define STORE(type, stacktype)                                                 \
+    {                                                                          \
+        auto a = safe_read_leb128<uint32_t>(iter);                             \
+        if ((1 << 6) & a) {                                                    \
+            a -= 1 << 6;                                                       \
+            /* todo: test multi memory proposal */                             \
+            a = safe_read_leb128<uint32_t>(iter);                              \
+        } else {                                                               \
+            ensure(mod.memory.exists, "unknown memory");                       \
+        }                                                                      \
+        auto align = 1ull << a;                                                \
+        ensure(align <= sizeof(type),                                          \
+               "alignment must not be larger than natural");                   \
+        /* auto offset = */ safe_read_leb128<uint32_t>(iter);                  \
+        stack.apply(std::array{valtype::i32, stacktype},                       \
+                    std::array<valtype, 0>());                                 \
+        nextop();                                                              \
+    }
+
+#define HANDLER(name)                                                          \
+    void validate_##name(Module &mod, safe_byte_iterator &iter,                \
+                         FunctionShell &fn, WasmStack &stack,                  \
+                         std::vector<ControlFlow> &control_stack)
+
+#define V(name, _, byte) HANDLER(name);
+FOREACH_INSTRUCTION(V)
+#undef V
+
+#ifdef WASM_DEBUG
+#define nextop()                                                               \
+    do {                                                                       \
+        auto byte = *iter++;                                                   \
+        std::cerr << "reading instruction " << instructions[byte].c_str()      \
+                  << " at " << iter - bytes.get() << std::endl;                \
+        std::cerr << "control stack size: " << control_stack.size()            \
+                  << std::endl;                                                \
+        std::cerr << "control stack: ";                                        \
+        for (auto &target : control_stack) {                                   \
+            std::cerr << target.expected.size() << " ";                        \
+        }                                                                      \
+        std::cerr << std::endl;                                                \
+        std::cerr << "stack size: " << stack.size() << std::endl;              \
+        std::cerr << "stack: ";                                                \
+        for (auto &ty : stack) {                                               \
+            std::cerr << valtype_names[static_cast<uint8_t>(ty)].c_str()       \
+                      << " ";                                                  \
+        }                                                                      \
+        std::cerr << std::endl;                                                \
+        std::cerr << std::endl;                                                \
+        [[clang::musttail]] return funcs[byte](mod, iter, fn, stack,           \
+                                               control_stack);                 \
+    } while (0)
+#else
+#define nextop()                                                               \
+    do {                                                                       \
+        [[clang::musttail]] return funcs[*iter++](mod, iter, fn, stack,        \
+                                                  control_stack);              \
+    } while (0)
+#endif
+
+static ValidationHandler *funcs[] = {
+#define V(name, _, byte) [byte] = &validate_##name,
+    FOREACH_INSTRUCTION(V)
+#undef V
+};
+
+HANDLER(unreachable) {
+            stack.polymorphize();
+    nextop();
+}
+HANDLER(nop) { nextop(); }
+HANDLER(block) {
+    auto &signature = Signature::read_blocktype(mod.types, iter);
+            auto block_start = iter.unsafe_ptr();
+
+            stack.enter_flow(signature.params);
+            control_stack.emplace_back(ControlFlow(signature.results, signature,
+                                                   stack.polymorphism(),
+                                                   Block(block_start)));
+            stack.unpolymorphize();
+    nextop();
+        }
+HANDLER(loop) {
+    auto &signature = Signature::read_blocktype(mod.types, iter);
+
+            stack.enter_flow(signature.params);
+    control_stack.emplace_back(
+        ControlFlow(signature.params, signature, stack.polymorphism(), Loop()));
+            stack.unpolymorphize();
+    nextop();
+        }
+HANDLER(if_) {
+    auto &signature = Signature::read_blocktype(mod.types, iter);
+            auto if_start = iter.unsafe_ptr();
+
+            stack.pop(valtype::i32);
+            stack.enter_flow(signature.params);
+            control_stack.emplace_back(ControlFlow(signature.results, signature,
+                                           stack.polymorphism(), If(if_start)));
+            stack.unpolymorphize();
+    nextop();
+        }
+HANDLER(else_) {
+            auto &[_, sig, __, construct] = control_stack.back();
+    ensure(std::holds_alternative<If>(construct), "else must close an if");
+            ensure(stack == sig.results, "type mismatch");
+
+            stack.pop(sig.results);
+            stack.push(sig.params);
+
+            auto &if_ = std::get<If>(construct);
+    control_stack.back().construct = IfElse(if_.if_start, iter.unsafe_ptr());
+            stack.unpolymorphize();
+    nextop();
+        }
+HANDLER(end) {
+            if (control_stack.size() == 1) {
+        ensure(stack == fn.type.results, "type mismatch stack vs. results");
+                return;
+            }
+
+            auto &[_, sig, polymorphism, construct] = control_stack.back();
+
+            ensure(stack == sig.results, "type mismatch stack vs. results");
+
+            if (std::holds_alternative<Block>(construct)) {
+                auto &[block_start] = std::get<Block>(construct);
+        mod.block_ends[block_start] = iter.unsafe_ptr();
+            } else if (std::holds_alternative<Loop>(construct)) {
+                // do nothing
+            } else if (std::holds_alternative<If>(construct)) {
+        ensure(sig.params == sig.results, "type mismatch params vs. results");
+                auto &[if_start] = std::get<If>(construct);
+        mod.if_jumps[if_start] = {iter.unsafe_ptr() - 1, iter.unsafe_ptr()};
+            } else if (std::holds_alternative<IfElse>(construct)) {
+                auto &[if_start, else_start] = std::get<IfElse>(construct);
+        mod.if_jumps[if_start] = {else_start, iter.unsafe_ptr()};
+            }
+            stack.pop(sig.results);
+            stack.pop(valtype::null);
+
+            stack.set_polymorphism(polymorphism);
+            stack.push(sig.results);
+
+            control_stack.pop_back();
+    nextop();
+        }
+HANDLER(br) {
+            stack.check_br(control_stack, safe_read_leb128<uint32_t>(iter));
+            stack.polymorphize();
+    nextop();
+        }
+HANDLER(br_if) {
+            stack.pop(valtype::i32);
+            auto depth = safe_read_leb128<uint32_t>(iter);
+            stack.check_br(control_stack, depth);
+    nextop();
+        }
+HANDLER(br_table) {
+            stack.pop(valtype::i32);
+            auto n_targets = safe_read_leb128<uint32_t>(iter);
+
+    auto targets = (uint32_t *)alloca(sizeof(uint32_t) * (n_targets + 1));
+            for (uint32_t i = 0; i <= n_targets; ++i) {
+                auto target = safe_read_leb128<uint32_t>(iter);
+                ensure(target < control_stack.size(), "unknown label");
+                targets[i] = target;
+            }
+            auto base = control_stack.size() - 1;
+    auto &default_target = control_stack[base - targets[n_targets]].expected;
+            for (uint32_t i = 0; i <= n_targets; ++i) {
+                auto &target = control_stack[base - targets[i]].expected;
+                if (stack.can_be_anything()) {
+                    ensure(stack.check(target), "type mismatch");
+            ensure(default_target.size() == target.size(), "type mismatch");
+                } else {
+                    stack.check_br(control_stack, targets[i]);
+                    ensure(default_target == target, "type mismatch");
+                }
+            }
+            stack.polymorphize();
+    nextop();
+        }
+HANDLER(return_) {
+            stack.check_br(control_stack, control_stack.size() - 1);
+            stack.polymorphize();
+    nextop();
+}
+HANDLER(call) {
+            auto fn_idx = safe_read_leb128<uint32_t>(iter);
+    ensure(fn_idx < mod.functions.size(), "unknown function");
+
+    auto &func = mod.functions[fn_idx];
+    stack.apply(func.type);
+    nextop();
+        }
+HANDLER(call_indirect) {
+            stack.pop(valtype::i32);
+
+            auto type_idx = safe_read_leb128<uint32_t>(iter);
+    ensure(type_idx < mod.types.size(), "unknown type");
+
+            auto table_idx = safe_read_leb128<uint32_t>(iter);
+    ensure(table_idx < mod.tables.size(), "unknown table");
+    ensure(mod.tables[table_idx].type == valtype::funcref, "type mismatch");
+
+    stack.apply(mod.types[type_idx]);
+    nextop();
+        }
+HANDLER(drop) {
+            stack.pop(stack.back());
+    nextop();
+}
+HANDLER(select) {
+            // first pop the condition
+            stack.pop(valtype::i32);
+
+            auto ty = stack.back();
+            ensure(ty == valtype::any || is_numtype(ty), "type mismatch");
+
+            // then apply the dynamic type
+            stack.apply(std::array{ty, ty}, std::array{ty});
+    nextop();
+        }
+HANDLER(select_t) {
+            auto n_results = safe_read_leb128<uint32_t>(iter);
+            ensure(n_results == 1, "invalid result arity");
+            auto maybe_valtype = *iter++;
+            ensure(is_valtype(maybe_valtype), "invalid result type");
+
+            // first pop the condition
+            stack.pop(valtype::i32);
+            auto ty = stack.back();
+            // then apply the dynamic type
+            stack.apply(std::array{ty, ty}, std::array{ty});
+    nextop();
+        }
+HANDLER(localget) {
+            auto local_idx = safe_read_leb128<uint32_t>(iter);
+            ensure(local_idx < fn.locals.size(), "unknown local");
+            auto local_ty = fn.locals[local_idx];
+            stack.apply(std::array<valtype, 0>(), std::array{local_ty});
+    nextop();
+        }
+HANDLER(localset) {
+            auto local_idx = safe_read_leb128<uint32_t>(iter);
+            ensure(local_idx < fn.locals.size(), "unknown local");
+            auto local_ty = fn.locals[local_idx];
+            stack.apply(std::array{local_ty}, std::array<valtype, 0>());
+    nextop();
+        }
+HANDLER(localtee) {
+            auto local_idx = safe_read_leb128<uint32_t>(iter);
+            ensure(local_idx < fn.locals.size(), "unknown local");
+            auto local_ty = fn.locals[local_idx];
+            stack.apply(std::array{local_ty}, std::array{local_ty});
+    nextop();
+        }
+HANDLER(tableget) {
+            auto table_idx = safe_read_leb128<uint32_t>(iter);
+    ensure(table_idx < mod.tables.size(), "unknown table");
+    auto table_ty = mod.tables[table_idx].type;
+            stack.apply(std::array{valtype::i32}, std::array{table_ty});
+    nextop();
+        }
+HANDLER(tableset) {
+            auto table_idx = safe_read_leb128<uint32_t>(iter);
+    ensure(table_idx < mod.tables.size(), "unknown table");
+    auto table_ty = mod.tables[table_idx].type;
+    stack.apply(std::array{valtype::i32, table_ty}, std::array<valtype, 0>());
+    nextop();
+        }
+HANDLER(globalget) {
+            auto global_idx = safe_read_leb128<uint32_t>(iter);
+    ensure(global_idx < mod.globals.size(), "unknown global");
+    auto global_ty = mod.globals[global_idx].type;
+            stack.apply(std::array<valtype, 0>(), std::array{global_ty});
+    nextop();
+        }
+HANDLER(globalset) {
+            auto global_idx = safe_read_leb128<uint32_t>(iter);
+    ensure(global_idx < mod.globals.size(), "unknown global");
+    ensure(mod.globals[global_idx].mutability == mut::var,
+                   "global is immutable");
+    auto global_ty = mod.globals[global_idx].type;
+            stack.apply(std::array{global_ty}, std::array<valtype, 0>());
+    nextop();
+        }
+HANDLER(memorysize) {
+            if (*iter++ != 0)
+                error<malformed_error>("zero byte expected");
+    ensure(mod.memory.exists, "unknown memory");
+            stack.apply(std::array<valtype, 0>(), std::array{valtype::i32});
+    nextop();
+        }
+HANDLER(memorygrow) {
+            if (*iter++ != 0)
+                error<malformed_error>("zero byte expected");
+    ensure(mod.memory.exists, "unknown memory");
+            stack.apply(std::array{valtype::i32}, std::array{valtype::i32});
+    nextop();
+        }
+HANDLER(i32const) {
+            safe_read_sleb128<uint32_t>(iter);
+            stack.apply(std::array<valtype, 0>(), std::array{valtype::i32});
+    nextop();
+}
+HANDLER(i64const) {
+            safe_read_sleb128<uint64_t>(iter);
+            stack.apply(std::array<valtype, 0>(), std::array{valtype::i64});
+    nextop();
+}
+HANDLER(f32const) {
+            iter += sizeof(float);
+            stack.apply(std::array<valtype, 0>(), std::array{valtype::f32});
+    nextop();
+        }
+HANDLER(f64const) {
+            iter += sizeof(double);
+            stack.apply(std::array<valtype, 0>(), std::array{valtype::f64});
+    nextop();
+}
+            // clang-format off
+HANDLER(i32load) {     LOAD(uint32_t,  valtype::i32); }
+HANDLER(i64load) {     LOAD(uint64_t,  valtype::i64); }
+HANDLER(f32load) {     LOAD(float,     valtype::f32); }
+HANDLER(f64load) {     LOAD(double,    valtype::f64); }
+HANDLER(i32load8_s) {  LOAD(int8_t,    valtype::i32); }
+HANDLER(i32load8_u) {  LOAD(uint8_t,   valtype::i32); }
+HANDLER(i32load16_s) { LOAD(int16_t,   valtype::i32); }
+HANDLER(i32load16_u) { LOAD(uint16_t,  valtype::i32); }
+HANDLER(i64load8_s) {  LOAD(int8_t,    valtype::i64); }
+HANDLER(i64load8_u) {  LOAD(uint8_t,   valtype::i64); }
+HANDLER(i64load16_s) { LOAD(int16_t,   valtype::i64); }
+HANDLER(i64load16_u) { LOAD(uint16_t,  valtype::i64); }
+HANDLER(i64load32_s) { LOAD(int32_t,   valtype::i64); }
+HANDLER(i64load32_u) { LOAD(uint32_t,  valtype::i64); }
+HANDLER(i32store) {    STORE(uint32_t, valtype::i32); }
+HANDLER(i64store) {    STORE(uint64_t, valtype::i64); }
+HANDLER(f32store) {    STORE(float,    valtype::f32); }
+HANDLER(f64store) {    STORE(double,   valtype::f64); }
+HANDLER(i32store8) {   STORE(uint8_t,  valtype::i32); }
+HANDLER(i32store16) {  STORE(uint16_t, valtype::i32); }
+HANDLER(i64store8) {   STORE(uint8_t,  valtype::i64); }
+HANDLER(i64store16) {  STORE(uint16_t, valtype::i64); }
+HANDLER(i64store32) {  STORE(uint32_t, valtype::i64); }
+HANDLER(i32eqz) {      stack.apply(std::array{valtype::i32              }, std::array{valtype::i32}); nextop(); }
+HANDLER(i64eqz) {      stack.apply(std::array{valtype::i64              }, std::array{valtype::i32}); nextop(); }
+HANDLER(i32eq) {       stack.apply(std::array{valtype::i32, valtype::i32}, std::array{valtype::i32}); nextop(); }
+HANDLER(i64eq) {       stack.apply(std::array{valtype::i64, valtype::i64}, std::array{valtype::i32}); nextop(); }
+HANDLER(i32ne) {       stack.apply(std::array{valtype::i32, valtype::i32}, std::array{valtype::i32}); nextop(); }
+HANDLER(i64ne) {       stack.apply(std::array{valtype::i64, valtype::i64}, std::array{valtype::i32}); nextop(); }
+HANDLER(i32lt_s) {     stack.apply(std::array{valtype::i32, valtype::i32}, std::array{valtype::i32}); nextop(); }
+HANDLER(i64lt_s) {     stack.apply(std::array{valtype::i64, valtype::i64}, std::array{valtype::i32}); nextop(); }
+HANDLER(i32lt_u) {     stack.apply(std::array{valtype::i32, valtype::i32}, std::array{valtype::i32}); nextop(); }
+HANDLER(i64lt_u) {     stack.apply(std::array{valtype::i64, valtype::i64}, std::array{valtype::i32}); nextop(); }
+HANDLER(i32gt_s) {     stack.apply(std::array{valtype::i32, valtype::i32}, std::array{valtype::i32}); nextop(); }
+HANDLER(i64gt_s) {     stack.apply(std::array{valtype::i64, valtype::i64}, std::array{valtype::i32}); nextop(); }
+HANDLER(i32gt_u) {     stack.apply(std::array{valtype::i32, valtype::i32}, std::array{valtype::i32}); nextop(); }
+HANDLER(i64gt_u) {     stack.apply(std::array{valtype::i64, valtype::i64}, std::array{valtype::i32}); nextop(); }
+HANDLER(i32le_s) {     stack.apply(std::array{valtype::i32, valtype::i32}, std::array{valtype::i32}); nextop(); }
+HANDLER(i64le_s) {     stack.apply(std::array{valtype::i64, valtype::i64}, std::array{valtype::i32}); nextop(); }
+HANDLER(i32le_u) {     stack.apply(std::array{valtype::i32, valtype::i32}, std::array{valtype::i32}); nextop(); }
+HANDLER(i64le_u) {     stack.apply(std::array{valtype::i64, valtype::i64}, std::array{valtype::i32}); nextop(); }
+HANDLER(i32ge_s) {     stack.apply(std::array{valtype::i32, valtype::i32}, std::array{valtype::i32}); nextop(); }
+HANDLER(i64ge_s) {     stack.apply(std::array{valtype::i64, valtype::i64}, std::array{valtype::i32}); nextop(); }
+HANDLER(i32ge_u) {     stack.apply(std::array{valtype::i32, valtype::i32}, std::array{valtype::i32}); nextop(); }
+HANDLER(i64ge_u) {     stack.apply(std::array{valtype::i64, valtype::i64}, std::array{valtype::i32}); nextop(); }
+HANDLER(f32eq) {       stack.apply(std::array{valtype::f32, valtype::f32}, std::array{valtype::i32}); nextop(); }
+HANDLER(f64eq) {       stack.apply(std::array{valtype::f64, valtype::f64}, std::array{valtype::i32}); nextop(); }
+HANDLER(f32ne) {       stack.apply(std::array{valtype::f32, valtype::f32}, std::array{valtype::i32}); nextop(); }
+HANDLER(f64ne) {       stack.apply(std::array{valtype::f64, valtype::f64}, std::array{valtype::i32}); nextop(); }
+HANDLER(f32lt) {       stack.apply(std::array{valtype::f32, valtype::f32}, std::array{valtype::i32}); nextop(); }
+HANDLER(f64lt) {       stack.apply(std::array{valtype::f64, valtype::f64}, std::array{valtype::i32}); nextop(); }
+HANDLER(f32gt) {       stack.apply(std::array{valtype::f32, valtype::f32}, std::array{valtype::i32}); nextop(); }
+HANDLER(f64gt) {       stack.apply(std::array{valtype::f64, valtype::f64}, std::array{valtype::i32}); nextop(); }
+HANDLER(f32le) {       stack.apply(std::array{valtype::f32, valtype::f32}, std::array{valtype::i32}); nextop(); }
+HANDLER(f64le) {       stack.apply(std::array{valtype::f64, valtype::f64}, std::array{valtype::i32}); nextop(); }
+HANDLER(f32ge) {       stack.apply(std::array{valtype::f32, valtype::f32}, std::array{valtype::i32}); nextop(); }
+HANDLER(f64ge) {       stack.apply(std::array{valtype::f64, valtype::f64}, std::array{valtype::i32}); nextop(); }
+HANDLER(i32clz) {      stack.apply(std::array{valtype::i32              }, std::array{valtype::i32}); nextop(); }
+HANDLER(i64clz) {      stack.apply(std::array{valtype::i64              }, std::array{valtype::i64}); nextop(); }
+HANDLER(i32ctz) {      stack.apply(std::array{valtype::i32              }, std::array{valtype::i32}); nextop(); }
+HANDLER(i64ctz) {      stack.apply(std::array{valtype::i64              }, std::array{valtype::i64}); nextop(); }
+HANDLER(i32popcnt) {   stack.apply(std::array{valtype::i32              }, std::array{valtype::i32}); nextop(); }
+HANDLER(i64popcnt) {   stack.apply(std::array{valtype::i64              }, std::array{valtype::i64}); nextop(); }
+HANDLER(i32add) {      stack.apply(std::array{valtype::i32, valtype::i32}, std::array{valtype::i32}); nextop(); }
+HANDLER(i64add) {      stack.apply(std::array{valtype::i64, valtype::i64}, std::array{valtype::i64}); nextop(); }
+HANDLER(i32sub) {      stack.apply(std::array{valtype::i32, valtype::i32}, std::array{valtype::i32}); nextop(); }
+HANDLER(i64sub) {      stack.apply(std::array{valtype::i64, valtype::i64}, std::array{valtype::i64}); nextop(); }
+HANDLER(i32mul) {      stack.apply(std::array{valtype::i32, valtype::i32}, std::array{valtype::i32}); nextop(); }
+HANDLER(i64mul) {      stack.apply(std::array{valtype::i64, valtype::i64}, std::array{valtype::i64}); nextop(); }
+HANDLER(i32div_s) {    stack.apply(std::array{valtype::i32, valtype::i32}, std::array{valtype::i32}); nextop(); }
+HANDLER(i64div_s) {    stack.apply(std::array{valtype::i64, valtype::i64}, std::array{valtype::i64}); nextop(); }
+HANDLER(i32div_u) {    stack.apply(std::array{valtype::i32, valtype::i32}, std::array{valtype::i32}); nextop(); }
+HANDLER(i64div_u) {    stack.apply(std::array{valtype::i64, valtype::i64}, std::array{valtype::i64}); nextop(); }
+HANDLER(i32rem_s) {    stack.apply(std::array{valtype::i32, valtype::i32}, std::array{valtype::i32}); nextop(); }
+HANDLER(i64rem_s) {    stack.apply(std::array{valtype::i64, valtype::i64}, std::array{valtype::i64}); nextop(); }
+HANDLER(i32rem_u) {    stack.apply(std::array{valtype::i32, valtype::i32}, std::array{valtype::i32}); nextop(); }
+HANDLER(i64rem_u) {    stack.apply(std::array{valtype::i64, valtype::i64}, std::array{valtype::i64}); nextop(); }
+HANDLER(i32and) {      stack.apply(std::array{valtype::i32, valtype::i32}, std::array{valtype::i32}); nextop(); }
+HANDLER(i64and) {      stack.apply(std::array{valtype::i64, valtype::i64}, std::array{valtype::i64}); nextop(); }
+HANDLER(i32or) {       stack.apply(std::array{valtype::i32, valtype::i32}, std::array{valtype::i32}); nextop(); }
+HANDLER(i64or) {       stack.apply(std::array{valtype::i64, valtype::i64}, std::array{valtype::i64}); nextop(); }
+HANDLER(i32xor) {      stack.apply(std::array{valtype::i32, valtype::i32}, std::array{valtype::i32}); nextop(); }
+HANDLER(i64xor) {      stack.apply(std::array{valtype::i64, valtype::i64}, std::array{valtype::i64}); nextop(); }
+HANDLER(i32shl) {      stack.apply(std::array{valtype::i32, valtype::i32}, std::array{valtype::i32}); nextop(); }
+HANDLER(i64shl) {      stack.apply(std::array{valtype::i64, valtype::i64}, std::array{valtype::i64}); nextop(); }
+HANDLER(i32shr_s) {    stack.apply(std::array{valtype::i32, valtype::i32}, std::array{valtype::i32}); nextop(); }
+HANDLER(i64shr_s) {    stack.apply(std::array{valtype::i64, valtype::i64}, std::array{valtype::i64}); nextop(); }
+HANDLER(i32shr_u) {    stack.apply(std::array{valtype::i32, valtype::i32}, std::array{valtype::i32}); nextop(); }
+HANDLER(i64shr_u) {    stack.apply(std::array{valtype::i64, valtype::i64}, std::array{valtype::i64}); nextop(); }
+HANDLER(i32rotl) {     stack.apply(std::array{valtype::i32, valtype::i32}, std::array{valtype::i32}); nextop(); }
+HANDLER(i64rotl) {     stack.apply(std::array{valtype::i64, valtype::i64}, std::array{valtype::i64}); nextop(); }
+HANDLER(i32rotr) {     stack.apply(std::array{valtype::i32, valtype::i32}, std::array{valtype::i32}); nextop(); }
+HANDLER(i64rotr) {     stack.apply(std::array{valtype::i64, valtype::i64}, std::array{valtype::i64}); nextop(); }
+HANDLER(f32abs) {      stack.apply(std::array{valtype::f32              }, std::array{valtype::f32}); nextop(); }
+HANDLER(f64abs) {      stack.apply(std::array{valtype::f64              }, std::array{valtype::f64}); nextop(); }
+HANDLER(f32neg) {      stack.apply(std::array{valtype::f32              }, std::array{valtype::f32}); nextop(); }
+HANDLER(f64neg) {      stack.apply(std::array{valtype::f64              }, std::array{valtype::f64}); nextop(); }
+HANDLER(f32ceil) {     stack.apply(std::array{valtype::f32              }, std::array{valtype::f32}); nextop(); }
+HANDLER(f64ceil) {     stack.apply(std::array{valtype::f64              }, std::array{valtype::f64}); nextop(); }
+HANDLER(f32floor) {    stack.apply(std::array{valtype::f32              }, std::array{valtype::f32}); nextop(); }
+HANDLER(f64floor) {    stack.apply(std::array{valtype::f64              }, std::array{valtype::f64}); nextop(); }
+HANDLER(f32trunc) {    stack.apply(std::array{valtype::f32              }, std::array{valtype::f32}); nextop(); }
+HANDLER(f64trunc) {    stack.apply(std::array{valtype::f64              }, std::array{valtype::f64}); nextop(); }
+HANDLER(f32nearest) {  stack.apply(std::array{valtype::f32              }, std::array{valtype::f32}); nextop(); }
+HANDLER(f64nearest) {  stack.apply(std::array{valtype::f64              }, std::array{valtype::f64}); nextop(); }
+HANDLER(f32sqrt) {     stack.apply(std::array{valtype::f32              }, std::array{valtype::f32}); nextop(); }
+HANDLER(f64sqrt) {     stack.apply(std::array{valtype::f64              }, std::array{valtype::f64}); nextop(); }
+HANDLER(f32add) {      stack.apply(std::array{valtype::f32, valtype::f32}, std::array{valtype::f32}); nextop(); }
+HANDLER(f64add) {      stack.apply(std::array{valtype::f64, valtype::f64}, std::array{valtype::f64}); nextop(); }
+HANDLER(f32sub) {      stack.apply(std::array{valtype::f32, valtype::f32}, std::array{valtype::f32}); nextop(); }
+HANDLER(f64sub) {      stack.apply(std::array{valtype::f64, valtype::f64}, std::array{valtype::f64}); nextop(); }
+HANDLER(f32mul) {      stack.apply(std::array{valtype::f32, valtype::f32}, std::array{valtype::f32}); nextop(); }
+HANDLER(f64mul) {      stack.apply(std::array{valtype::f64, valtype::f64}, std::array{valtype::f64}); nextop(); }
+HANDLER(f32div) {      stack.apply(std::array{valtype::f32, valtype::f32}, std::array{valtype::f32}); nextop(); }
+HANDLER(f64div) {      stack.apply(std::array{valtype::f64, valtype::f64}, std::array{valtype::f64}); nextop(); }
+HANDLER(f32min) {      stack.apply(std::array{valtype::f32, valtype::f32}, std::array{valtype::f32}); nextop(); }
+HANDLER(f64min) {      stack.apply(std::array{valtype::f64, valtype::f64}, std::array{valtype::f64}); nextop(); }
+HANDLER(f32max) {      stack.apply(std::array{valtype::f32, valtype::f32}, std::array{valtype::f32}); nextop(); }
+HANDLER(f64max) {      stack.apply(std::array{valtype::f64, valtype::f64}, std::array{valtype::f64}); nextop(); }
+HANDLER(f32copysign) { stack.apply(std::array{valtype::f32, valtype::f32}, std::array{valtype::f32}); nextop(); }
+HANDLER(f64copysign) { stack.apply(std::array{valtype::f64, valtype::f64}, std::array{valtype::f64}); nextop(); }
+HANDLER(i32wrap_i64) {      stack.apply(std::array{valtype::i64}, std::array{valtype::i32}); nextop(); }
+HANDLER(i64extend_i32_s) {  stack.apply(std::array{valtype::i32}, std::array{valtype::i64}); nextop(); }
+HANDLER(i64extend_i32_u) {  stack.apply(std::array{valtype::i32}, std::array{valtype::i64}); nextop(); }
+HANDLER(i32trunc_f32_s) {   stack.apply(std::array{valtype::f32}, std::array{valtype::i32}); nextop(); }
+HANDLER(i64trunc_f32_s) {   stack.apply(std::array{valtype::f32}, std::array{valtype::i64}); nextop(); }
+HANDLER(i32trunc_f32_u) {   stack.apply(std::array{valtype::f32}, std::array{valtype::i32}); nextop(); }
+HANDLER(i64trunc_f32_u) {   stack.apply(std::array{valtype::f32}, std::array{valtype::i64}); nextop(); }
+HANDLER(i32trunc_f64_s) {   stack.apply(std::array{valtype::f64}, std::array{valtype::i32}); nextop(); }
+HANDLER(i64trunc_f64_s) {   stack.apply(std::array{valtype::f64}, std::array{valtype::i64}); nextop(); }
+HANDLER(i32trunc_f64_u) {   stack.apply(std::array{valtype::f64}, std::array{valtype::i32}); nextop(); }
+HANDLER(i64trunc_f64_u) {   stack.apply(std::array{valtype::f64}, std::array{valtype::i64}); nextop(); }
+HANDLER(f32convert_i32_s) { stack.apply(std::array{valtype::i32}, std::array{valtype::f32}); nextop(); }
+HANDLER(f64convert_i32_s) { stack.apply(std::array{valtype::i32}, std::array{valtype::f64}); nextop(); }
+HANDLER(f32convert_i32_u) { stack.apply(std::array{valtype::i32}, std::array{valtype::f32}); nextop(); }
+HANDLER(f64convert_i32_u) { stack.apply(std::array{valtype::i32}, std::array{valtype::f64}); nextop(); }
+HANDLER(f32convert_i64_s) { stack.apply(std::array{valtype::i64}, std::array{valtype::f32}); nextop(); }
+HANDLER(f64convert_i64_s) { stack.apply(std::array{valtype::i64}, std::array{valtype::f64}); nextop(); }
+HANDLER(f32convert_i64_u) { stack.apply(std::array{valtype::i64}, std::array{valtype::f32}); nextop(); }
+HANDLER(f64convert_i64_u) { stack.apply(std::array{valtype::i64}, std::array{valtype::f64}); nextop(); }
+HANDLER(f32demote_f64) {    stack.apply(std::array{valtype::f64}, std::array{valtype::f32}); nextop(); }
+HANDLER(f64promote_f32) {   stack.apply(std::array{valtype::f32}, std::array{valtype::f64}); nextop(); }
+HANDLER(i32reinterpret_f32) { stack.apply(std::array{valtype::f32}, std::array{valtype::i32}); nextop(); }
+HANDLER(f32reinterpret_i32) { stack.apply(std::array{valtype::i32}, std::array{valtype::f32}); nextop(); }
+HANDLER(i64reinterpret_f64) { stack.apply(std::array{valtype::f64}, std::array{valtype::i64}); nextop(); }
+HANDLER(f64reinterpret_i64) { stack.apply(std::array{valtype::i64}, std::array{valtype::f64}); nextop(); }
+HANDLER(i32extend8_s) {  stack.apply(std::array{valtype::i32}, std::array{valtype::i32}); nextop(); }
+HANDLER(i32extend16_s) { stack.apply(std::array{valtype::i32}, std::array{valtype::i32}); nextop(); }
+HANDLER(i64extend8_s) {  stack.apply(std::array{valtype::i64}, std::array{valtype::i64}); nextop(); }
+HANDLER(i64extend16_s) { stack.apply(std::array{valtype::i64}, std::array{valtype::i64}); nextop(); }
+HANDLER(i64extend32_s) { stack.apply(std::array{valtype::i64}, std::array{valtype::i64}); nextop(); }
+// clang-format on
+HANDLER(ref_null) {
+            auto type_idx = safe_read_leb128<uint32_t>(iter);
+            ensure(is_reftype(type_idx), "type mismatch");
+    stack.apply(std::array<valtype, 0>(),
+                std::array{static_cast<valtype>(type_idx)});
+    nextop();
+        }
+HANDLER(ref_is_null) {
+            auto peek = stack.back();
+            ensure(peek == valtype::any || is_reftype(peek), "type mismatch");
+            stack.apply(std::array{peek}, std::array{valtype::i32});
+    nextop();
+        }
+HANDLER(ref_func) {
+            auto func_idx = safe_read_leb128<uint32_t>(iter);
+    ensure(func_idx < mod.functions.size(), "invalid function index");
+    ensure(mod.functions[func_idx].is_declared,
+           "undeclared function reference");
+            stack.apply(std::array<valtype, 0>(), std::array{valtype::funcref});
+    nextop();
+        }
+HANDLER(ref_eq) {
+            auto peek = stack.back();
+            ensure(peek == valtype::any || is_reftype(peek), "type mismatch");
+            stack.apply(std::array{peek, peek}, std::array{valtype::i32});
+    nextop();
+        }
+HANDLER(i32_trunc_sat_f32_s) {
+                    stack.apply(std::array{valtype::f32}, std::array{valtype::i32});
+    nextop();
+}
+HANDLER(i32_trunc_sat_f32_u) {
+                    stack.apply(std::array{valtype::f32}, std::array{valtype::i32});
+    nextop();
+}
+HANDLER(i32_trunc_sat_f64_s) {
+                    stack.apply(std::array{valtype::f64}, std::array{valtype::i32});
+    nextop();
+}
+HANDLER(i32_trunc_sat_f64_u) {
+                    stack.apply(std::array{valtype::f64}, std::array{valtype::i32});
+    nextop();
+}
+HANDLER(i64_trunc_sat_f32_s) {
+                    stack.apply(std::array{valtype::f32}, std::array{valtype::i64});
+    nextop();
+}
+HANDLER(i64_trunc_sat_f32_u) {
+                    stack.apply(std::array{valtype::f32}, std::array{valtype::i64});
+    nextop();
+}
+HANDLER(i64_trunc_sat_f64_s) {
+                    stack.apply(std::array{valtype::f64}, std::array{valtype::i64});
+    nextop();
+}
+HANDLER(i64_trunc_sat_f64_u) {
+                    stack.apply(std::array{valtype::f64}, std::array{valtype::i64});
+    nextop();
+}
+HANDLER(memory_init) {
+                    auto seg_idx = safe_read_leb128<uint32_t>(iter);
+    if (*iter++ != 0)
+        error<malformed_error>("zero byte expected");
+
+    ensure(mod.memory.exists, "unknown memory 0");
+    if (mod.n_data == std::numeric_limits<uint32_t>::max()) {
+                        error<malformed_error>("data count section required");
+                    }
+    ensure(seg_idx < mod.n_data, "unknown data segment");
+
+    stack.apply(std::array{valtype::i32, valtype::i32, valtype::i32},
+                std::array<valtype, 0>());
+    nextop();
+                }
+HANDLER(data_drop) {
+                    auto seg_idx = safe_read_leb128<uint32_t>(iter);
+    if (mod.n_data == std::numeric_limits<uint32_t>::max()) {
+                        error<malformed_error>("data count section required");
+                    }
+    ensure(seg_idx < mod.n_data, "unknown data segment");
+    nextop();
+                }
+HANDLER(memory_copy) {
+    if (*iter++ != 0)
+        error<malformed_error>("zero byte expected");
+    if (*iter++ != 0)
+        error<malformed_error>("zero byte expected");
+    ensure(mod.memory.exists, "unknown memory 0");
+
+    stack.apply(std::array{valtype::i32, valtype::i32, valtype::i32},
+                std::array<valtype, 0>());
+    nextop();
+                }
+HANDLER(memory_fill) {
+    if (*iter++ != 0)
+        error<malformed_error>("zero byte expected");
+    ensure(mod.memory.exists, "unknown memory 0");
+
+    stack.apply(std::array{valtype::i32, valtype::i32, valtype::i32},
+                std::array<valtype, 0>());
+    nextop();
+                }
+HANDLER(table_init) {
+                    auto seg_idx = safe_read_leb128<uint32_t>(iter);
+                    auto table_idx = safe_read_leb128<uint32_t>(iter);
+
+    ensure(table_idx < mod.tables.size(), "unknown table");
+    ensure(seg_idx < mod.elements.size(), "unknown data segment");
+    ensure(mod.tables[table_idx].type == mod.elements[seg_idx].type,
+           "type mismatch");
+
+    stack.apply(std::array{valtype::i32, valtype::i32, valtype::i32},
+                std::array<valtype, 0>());
+    nextop();
+                }
+HANDLER(elem_drop) {
+                    auto seg_idx = safe_read_leb128<uint32_t>(iter);
+    ensure(seg_idx < mod.elements.size(), "unknown elem segment");
+    nextop();
+                }
+HANDLER(table_copy) {
+                    auto src_table_idx = safe_read_leb128<uint32_t>(iter);
+    ensure(src_table_idx < mod.tables.size(), "unknown table");
+                    auto dst_table_idx = safe_read_leb128<uint32_t>(iter);
+    ensure(dst_table_idx < mod.tables.size(), "unknown table");
+    ensure(mod.tables[src_table_idx].type == mod.tables[dst_table_idx].type,
+           "type mismatch");
+
+    stack.apply(std::array{valtype::i32, valtype::i32, valtype::i32},
+                std::array<valtype, 0>());
+    nextop();
+                }
+HANDLER(table_grow) {
+                    auto table_idx = safe_read_leb128<uint32_t>(iter);
+    ensure(table_idx < mod.tables.size(), "unknown table");
+
+    stack.apply(std::array{mod.tables[table_idx].type, valtype::i32},
+                std::array{valtype::i32});
+    nextop();
+                }
+HANDLER(table_size) {
+                    auto table_idx = safe_read_leb128<uint32_t>(iter);
+    ensure(table_idx < mod.tables.size(), "unknown table");
+
+                    stack.apply(std::array<valtype, 0>(), std::array{valtype::i32});
+    nextop();
+                }
+HANDLER(table_fill) {
+                    auto table_idx = safe_read_leb128<uint32_t>(iter);
+    ensure(table_idx < mod.tables.size(), "unknown table");
+
+    stack.apply(
+        std::array{valtype::i32, mod.tables[table_idx].type, valtype::i32},
+        std::array<valtype, 0>());
+    nextop();
+                }
+HANDLER(multibyte) {
+    static ValidationHandler *fc_funcs[] = {
+#define V(name, _, byte) [byte] = &validate_##name,
+        FOREACH_MULTIBYTE_INSTRUCTION(V)
+#undef V
+    };
+
+    [[clang::musttail]] return fc_funcs[safe_read_leb128<uint32_t>(iter)](
+        mod, iter, fn, stack, control_stack);
+        }
+
 void Module::validate(safe_byte_iterator &iter, FunctionShell &fn) {
     if (!fn.start) {
         // skip imported functions
@@ -1031,626 +1688,7 @@ void Module::validate(safe_byte_iterator &iter, FunctionShell &fn) {
     auto control_stack = std::vector<ControlFlow>(
         {ControlFlow(fn.type.results, fn.type, false, Function())});
 
-#define LOAD(type, stacktype)                                                  \
-    {                                                                          \
-        auto a = safe_read_leb128<uint32_t>(iter);                             \
-        ensure(memory.exists, "unknown memory");                               \
-        if (a >= 32) {                                                         \
-            error<malformed_error>("malformed memop flags");                   \
-        }                                                                      \
-        auto align = 1ull << a;                                                \
-        ensure(align <= sizeof(type),                                          \
-               "alignment must not be larger than natural");                   \
-        /* auto offset = */ safe_read_leb128<uint32_t>(iter);                  \
-        stack.apply(std::array{valtype::i32}, std::array{stacktype});          \
-        break;                                                                 \
-    }
-
-#define STORE(type, stacktype)                                                 \
-    {                                                                          \
-        auto a = safe_read_leb128<uint32_t>(iter);                             \
-        if ((1 << 6) & a) {                                                    \
-            a -= 1 << 6;                                                       \
-            /* todo: test multi memory proposal */                             \
-            a = safe_read_leb128<uint32_t>(iter);                              \
-        } else {                                                               \
-            ensure(memory.exists, "unknown memory");                           \
-        }                                                                      \
-        auto align = 1ull << a;                                                \
-        ensure(align <= sizeof(type),                                          \
-               "alignment must not be larger than natural");                   \
-        /* auto offset = */ safe_read_leb128<uint32_t>(iter);                  \
-        stack.apply(std::array{valtype::i32, stacktype},                       \
-                    std::array<valtype, 0>());                                 \
-        break;                                                                 \
-    }
-
-    using enum Instruction;
-    while (1) {
-        auto byte = *iter++;
-
-#ifdef WASM_DEBUG
-        std::cerr << "reading instruction " << instructions[byte].c_str()
-                  << " at " << iter - bytes.get() << std::endl;
-        std::cerr << "control stack size: " << control_stack.size()
-                  << std::endl;
-        std::cerr << "control stack: ";
-        for (auto &target : control_stack) {
-            std::cerr << target.expected.size() << " ";
-        }
-        std::cerr << std::endl;
-        std::cerr << "stack size: " << stack.size() << std::endl;
-        std::cerr << "stack: ";
-        for (auto &ty : stack) {
-            std::cerr << valtype_names[static_cast<uint8_t>(ty)].c_str() << " ";
-        }
-        std::cerr << std::endl;
-        std::cerr << std::endl;
-#endif
-
-        switch (static_cast<Instruction>(byte)) {
-        case unreachable:
-            stack.polymorphize();
-            break;
-        case nop:
-            break;
-        case block: {
-            auto &signature = Signature::read_blocktype(types, iter);
-            auto block_start = iter.unsafe_ptr();
-
-            stack.enter_flow(signature.params);
-            control_stack.emplace_back(ControlFlow(signature.results, signature,
-                                                   stack.polymorphism(),
-                                                   Block(block_start)));
-            stack.unpolymorphize();
-            break;
-        }
-        case loop: {
-            auto &signature = Signature::read_blocktype(types, iter);
-
-            stack.enter_flow(signature.params);
-            control_stack.emplace_back(ControlFlow(
-                signature.params, signature, stack.polymorphism(), Loop()));
-            stack.unpolymorphize();
-            break;
-        }
-        case if_: {
-            auto &signature = Signature::read_blocktype(types, iter);
-            auto if_start = iter.unsafe_ptr();
-
-            stack.pop(valtype::i32);
-            stack.enter_flow(signature.params);
-            control_stack.emplace_back(ControlFlow(signature.results, signature,
-                                                   stack.polymorphism(),
-                                                   If(if_start)));
-            stack.unpolymorphize();
-            break;
-        }
-        case else_: {
-            auto &[_, sig, __, construct] = control_stack.back();
-            ensure(std::holds_alternative<If>(construct),
-                   "else must close an if");
-            ensure(stack == sig.results, "type mismatch");
-
-            stack.pop(sig.results);
-            stack.push(sig.params);
-
-            auto &if_ = std::get<If>(construct);
-            control_stack.back().construct =
-                IfElse(if_.if_start, iter.unsafe_ptr());
-            stack.unpolymorphize();
-            break;
-        }
-        case end: {
-            if (control_stack.size() == 1) {
-                ensure(stack == fn.type.results,
-                       "type mismatch stack vs. results");
-                return;
-            }
-
-            auto &[_, sig, polymorphism, construct] = control_stack.back();
-
-            ensure(stack == sig.results, "type mismatch stack vs. results");
-
-            if (std::holds_alternative<Block>(construct)) {
-                auto &[block_start] = std::get<Block>(construct);
-                block_ends[block_start] = iter.unsafe_ptr();
-            } else if (std::holds_alternative<Loop>(construct)) {
-                // do nothing
-            } else if (std::holds_alternative<If>(construct)) {
-                ensure(sig.params == sig.results,
-                       "type mismatch params vs. results");
-                auto &[if_start] = std::get<If>(construct);
-                if_jumps[if_start] = {iter.unsafe_ptr() - 1, iter.unsafe_ptr()};
-            } else if (std::holds_alternative<IfElse>(construct)) {
-                auto &[if_start, else_start] = std::get<IfElse>(construct);
-                if_jumps[if_start] = {else_start, iter.unsafe_ptr()};
-            }
-            stack.pop(sig.results);
-            stack.pop(valtype::null);
-
-            stack.set_polymorphism(polymorphism);
-            stack.push(sig.results);
-
-            control_stack.pop_back();
-            break;
-        }
-        case br: {
-            stack.check_br(control_stack, safe_read_leb128<uint32_t>(iter));
-            stack.polymorphize();
-            break;
-        }
-        case br_if: {
-            stack.pop(valtype::i32);
-            auto depth = safe_read_leb128<uint32_t>(iter);
-            stack.check_br(control_stack, depth);
-            break;
-        }
-        case br_table: {
-            stack.pop(valtype::i32);
-            auto n_targets = safe_read_leb128<uint32_t>(iter);
-
-            auto targets = std::vector<uint32_t>(n_targets + 1);
-            for (uint32_t i = 0; i <= n_targets; ++i) {
-                auto target = safe_read_leb128<uint32_t>(iter);
-                ensure(target < control_stack.size(), "unknown label");
-                targets[i] = target;
-            }
-            auto base = control_stack.size() - 1;
-            auto &default_target =
-                control_stack[base - targets[n_targets]].expected;
-            for (uint32_t i = 0; i <= n_targets; ++i) {
-                auto &target = control_stack[base - targets[i]].expected;
-                if (stack.can_be_anything()) {
-                    ensure(stack.check(target), "type mismatch");
-                    ensure(default_target.size() == target.size(),
-                           "type mismatch");
-                } else {
-                    stack.check_br(control_stack, targets[i]);
-                    ensure(default_target == target, "type mismatch");
-                }
-            }
-            stack.polymorphize();
-            break;
-        }
-        case return_:
-            stack.check_br(control_stack, control_stack.size() - 1);
-            stack.polymorphize();
-            break;
-        case call: {
-            auto fn_idx = safe_read_leb128<uint32_t>(iter);
-            ensure(fn_idx < functions.size(), "unknown function");
-
-            auto &fn = functions[fn_idx];
-            stack.apply(fn.type);
-            break;
-        }
-        case call_indirect: {
-            stack.pop(valtype::i32);
-
-            auto type_idx = safe_read_leb128<uint32_t>(iter);
-            ensure(type_idx < types.size(), "unknown type");
-
-            auto table_idx = safe_read_leb128<uint32_t>(iter);
-            ensure(table_idx < tables.size(), "unknown table");
-            ensure(tables[table_idx].type == valtype::funcref, "type mismatch");
-
-            stack.apply(types[type_idx]);
-            break;
-        }
-        case drop:
-            stack.pop(stack.back());
-            break;
-        case select: {
-            // first pop the condition
-            stack.pop(valtype::i32);
-
-            auto ty = stack.back();
-            ensure(ty == valtype::any || is_numtype(ty), "type mismatch");
-
-            // then apply the dynamic type
-            stack.apply(std::array{ty, ty}, std::array{ty});
-            break;
-        }
-        case select_t: {
-            auto n_results = safe_read_leb128<uint32_t>(iter);
-            ensure(n_results == 1, "invalid result arity");
-            auto maybe_valtype = *iter++;
-            ensure(is_valtype(maybe_valtype), "invalid result type");
-
-            // first pop the condition
-            stack.pop(valtype::i32);
-            auto ty = stack.back();
-            // then apply the dynamic type
-            stack.apply(std::array{ty, ty}, std::array{ty});
-            break;
-        }
-        case localget: {
-            auto local_idx = safe_read_leb128<uint32_t>(iter);
-            ensure(local_idx < fn.locals.size(), "unknown local");
-            auto local_ty = fn.locals[local_idx];
-            stack.apply(std::array<valtype, 0>(), std::array{local_ty});
-            break;
-        }
-        case localset: {
-            auto local_idx = safe_read_leb128<uint32_t>(iter);
-            ensure(local_idx < fn.locals.size(), "unknown local");
-            auto local_ty = fn.locals[local_idx];
-            stack.apply(std::array{local_ty}, std::array<valtype, 0>());
-            break;
-        }
-        case localtee: {
-            auto local_idx = safe_read_leb128<uint32_t>(iter);
-            ensure(local_idx < fn.locals.size(), "unknown local");
-            auto local_ty = fn.locals[local_idx];
-            stack.apply(std::array{local_ty}, std::array{local_ty});
-            break;
-        }
-        case tableget: {
-            auto table_idx = safe_read_leb128<uint32_t>(iter);
-            ensure(table_idx < tables.size(), "unknown table");
-            auto table_ty = tables[table_idx].type;
-            stack.apply(std::array{valtype::i32}, std::array{table_ty});
-            break;
-        }
-        case tableset: {
-            auto table_idx = safe_read_leb128<uint32_t>(iter);
-            ensure(table_idx < tables.size(), "unknown table");
-            auto table_ty = tables[table_idx].type;
-            stack.apply(std::array{valtype::i32, table_ty},
-                        std::array<valtype, 0>());
-            break;
-        }
-        case globalget: {
-            auto global_idx = safe_read_leb128<uint32_t>(iter);
-            ensure(global_idx < globals.size(), "unknown global");
-            auto global_ty = globals[global_idx].type;
-            stack.apply(std::array<valtype, 0>(), std::array{global_ty});
-            break;
-        }
-        case globalset: {
-            auto global_idx = safe_read_leb128<uint32_t>(iter);
-            ensure(global_idx < globals.size(), "unknown global");
-            ensure(globals[global_idx].mutability == mut::var,
-                   "global is immutable");
-            auto global_ty = globals[global_idx].type;
-            stack.apply(std::array{global_ty}, std::array<valtype, 0>());
-            break;
-        }
-        case memorysize: {
-            if (*iter++ != 0)
-                error<malformed_error>("zero byte expected");
-            ensure(memory.exists, "unknown memory");
-            stack.apply(std::array<valtype, 0>(), std::array{valtype::i32});
-            break;
-        }
-        case memorygrow: {
-            if (*iter++ != 0)
-                error<malformed_error>("zero byte expected");
-            ensure(memory.exists, "unknown memory");
-            stack.apply(std::array{valtype::i32}, std::array{valtype::i32});
-            break;
-        }
-        case i32const:
-            safe_read_sleb128<uint32_t>(iter);
-            stack.apply(std::array<valtype, 0>(), std::array{valtype::i32});
-            break;
-        case i64const:
-            safe_read_sleb128<uint64_t>(iter);
-            stack.apply(std::array<valtype, 0>(), std::array{valtype::i64});
-            break;
-        case f32const: {
-            iter += sizeof(float);
-            stack.apply(std::array<valtype, 0>(), std::array{valtype::f32});
-            break;
-        }
-        case f64const:
-            iter += sizeof(double);
-            stack.apply(std::array<valtype, 0>(), std::array{valtype::f64});
-            break;
-            // clang-format off
-        case i32load:     LOAD(uint32_t,  valtype::i32);
-        case i64load:     LOAD(uint64_t,  valtype::i64);
-        case f32load:     LOAD(float,     valtype::f32);
-        case f64load:     LOAD(double,    valtype::f64);
-        case i32load8_s:  LOAD(int8_t,    valtype::i32);
-        case i32load8_u:  LOAD(uint8_t,   valtype::i32);
-        case i32load16_s: LOAD(int16_t,   valtype::i32);
-        case i32load16_u: LOAD(uint16_t,  valtype::i32);
-        case i64load8_s:  LOAD(int8_t,    valtype::i64);
-        case i64load8_u:  LOAD(uint8_t,   valtype::i64);
-        case i64load16_s: LOAD(int16_t,   valtype::i64);
-        case i64load16_u: LOAD(uint16_t,  valtype::i64);
-        case i64load32_s: LOAD(int32_t,   valtype::i64);
-        case i64load32_u: LOAD(uint32_t,  valtype::i64);
-        case i32store:    STORE(uint32_t, valtype::i32);
-        case i64store:    STORE(uint64_t, valtype::i64);
-        case f32store:    STORE(float,    valtype::f32);
-        case f64store:    STORE(double,   valtype::f64);
-        case i32store8:   STORE(uint8_t,  valtype::i32);
-        case i32store16:  STORE(uint16_t, valtype::i32);
-        case i64store8:   STORE(uint8_t,  valtype::i64);
-        case i64store16:  STORE(uint16_t, valtype::i64);
-        case i64store32:  STORE(uint32_t, valtype::i64);
-        case i32eqz:      stack.apply(std::array{valtype::i32              }, std::array{valtype::i32}); break;
-        case i64eqz:      stack.apply(std::array{valtype::i64              }, std::array{valtype::i32}); break;
-        case i32eq:       stack.apply(std::array{valtype::i32, valtype::i32}, std::array{valtype::i32}); break;
-        case i64eq:       stack.apply(std::array{valtype::i64, valtype::i64}, std::array{valtype::i32}); break;
-        case i32ne:       stack.apply(std::array{valtype::i32, valtype::i32}, std::array{valtype::i32}); break;
-        case i64ne:       stack.apply(std::array{valtype::i64, valtype::i64}, std::array{valtype::i32}); break;
-        case i32lt_s:     stack.apply(std::array{valtype::i32, valtype::i32}, std::array{valtype::i32}); break;
-        case i64lt_s:     stack.apply(std::array{valtype::i64, valtype::i64}, std::array{valtype::i32}); break;
-        case i32lt_u:     stack.apply(std::array{valtype::i32, valtype::i32}, std::array{valtype::i32}); break;
-        case i64lt_u:     stack.apply(std::array{valtype::i64, valtype::i64}, std::array{valtype::i32}); break;
-        case i32gt_s:     stack.apply(std::array{valtype::i32, valtype::i32}, std::array{valtype::i32}); break;
-        case i64gt_s:     stack.apply(std::array{valtype::i64, valtype::i64}, std::array{valtype::i32}); break;
-        case i32gt_u:     stack.apply(std::array{valtype::i32, valtype::i32}, std::array{valtype::i32}); break;
-        case i64gt_u:     stack.apply(std::array{valtype::i64, valtype::i64}, std::array{valtype::i32}); break;
-        case i32le_s:     stack.apply(std::array{valtype::i32, valtype::i32}, std::array{valtype::i32}); break;
-        case i64le_s:     stack.apply(std::array{valtype::i64, valtype::i64}, std::array{valtype::i32}); break;
-        case i32le_u:     stack.apply(std::array{valtype::i32, valtype::i32}, std::array{valtype::i32}); break;
-        case i64le_u:     stack.apply(std::array{valtype::i64, valtype::i64}, std::array{valtype::i32}); break;
-        case i32ge_s:     stack.apply(std::array{valtype::i32, valtype::i32}, std::array{valtype::i32}); break;
-        case i64ge_s:     stack.apply(std::array{valtype::i64, valtype::i64}, std::array{valtype::i32}); break;
-        case i32ge_u:     stack.apply(std::array{valtype::i32, valtype::i32}, std::array{valtype::i32}); break;
-        case i64ge_u:     stack.apply(std::array{valtype::i64, valtype::i64}, std::array{valtype::i32}); break;
-        case f32eq:       stack.apply(std::array{valtype::f32, valtype::f32}, std::array{valtype::i32}); break;
-        case f64eq:       stack.apply(std::array{valtype::f64, valtype::f64}, std::array{valtype::i32}); break;
-        case f32ne:       stack.apply(std::array{valtype::f32, valtype::f32}, std::array{valtype::i32}); break;
-        case f64ne:       stack.apply(std::array{valtype::f64, valtype::f64}, std::array{valtype::i32}); break;
-        case f32lt:       stack.apply(std::array{valtype::f32, valtype::f32}, std::array{valtype::i32}); break;
-        case f64lt:       stack.apply(std::array{valtype::f64, valtype::f64}, std::array{valtype::i32}); break;
-        case f32gt:       stack.apply(std::array{valtype::f32, valtype::f32}, std::array{valtype::i32}); break;
-        case f64gt:       stack.apply(std::array{valtype::f64, valtype::f64}, std::array{valtype::i32}); break;
-        case f32le:       stack.apply(std::array{valtype::f32, valtype::f32}, std::array{valtype::i32}); break;
-        case f64le:       stack.apply(std::array{valtype::f64, valtype::f64}, std::array{valtype::i32}); break;
-        case f32ge:       stack.apply(std::array{valtype::f32, valtype::f32}, std::array{valtype::i32}); break;
-        case f64ge:       stack.apply(std::array{valtype::f64, valtype::f64}, std::array{valtype::i32}); break;
-        case i32clz:      stack.apply(std::array{valtype::i32              }, std::array{valtype::i32}); break;
-        case i64clz:      stack.apply(std::array{valtype::i64              }, std::array{valtype::i64}); break;
-        case i32ctz:      stack.apply(std::array{valtype::i32              }, std::array{valtype::i32}); break;
-        case i64ctz:      stack.apply(std::array{valtype::i64              }, std::array{valtype::i64}); break;
-        case i32popcnt:   stack.apply(std::array{valtype::i32              }, std::array{valtype::i32}); break;
-        case i64popcnt:   stack.apply(std::array{valtype::i64              }, std::array{valtype::i64}); break;
-        case i32add:      stack.apply(std::array{valtype::i32, valtype::i32}, std::array{valtype::i32}); break;
-        case i64add:      stack.apply(std::array{valtype::i64, valtype::i64}, std::array{valtype::i64}); break;
-        case i32sub:      stack.apply(std::array{valtype::i32, valtype::i32}, std::array{valtype::i32}); break;
-        case i64sub:      stack.apply(std::array{valtype::i64, valtype::i64}, std::array{valtype::i64}); break;
-        case i32mul:      stack.apply(std::array{valtype::i32, valtype::i32}, std::array{valtype::i32}); break;
-        case i64mul:      stack.apply(std::array{valtype::i64, valtype::i64}, std::array{valtype::i64}); break;
-        case i32div_s:    stack.apply(std::array{valtype::i32, valtype::i32}, std::array{valtype::i32}); break;
-        case i64div_s:    stack.apply(std::array{valtype::i64, valtype::i64}, std::array{valtype::i64}); break;
-        case i32div_u:    stack.apply(std::array{valtype::i32, valtype::i32}, std::array{valtype::i32}); break;
-        case i64div_u:    stack.apply(std::array{valtype::i64, valtype::i64}, std::array{valtype::i64}); break;
-        case i32rem_s:    stack.apply(std::array{valtype::i32, valtype::i32}, std::array{valtype::i32}); break;
-        case i64rem_s:    stack.apply(std::array{valtype::i64, valtype::i64}, std::array{valtype::i64}); break;
-        case i32rem_u:    stack.apply(std::array{valtype::i32, valtype::i32}, std::array{valtype::i32}); break;
-        case i64rem_u:    stack.apply(std::array{valtype::i64, valtype::i64}, std::array{valtype::i64}); break;
-        case i32and:      stack.apply(std::array{valtype::i32, valtype::i32}, std::array{valtype::i32}); break;
-        case i64and:      stack.apply(std::array{valtype::i64, valtype::i64}, std::array{valtype::i64}); break;
-        case i32or:       stack.apply(std::array{valtype::i32, valtype::i32}, std::array{valtype::i32}); break;
-        case i64or:       stack.apply(std::array{valtype::i64, valtype::i64}, std::array{valtype::i64}); break;
-        case i32xor:      stack.apply(std::array{valtype::i32, valtype::i32}, std::array{valtype::i32}); break;
-        case i64xor:      stack.apply(std::array{valtype::i64, valtype::i64}, std::array{valtype::i64}); break;
-        case i32shl:      stack.apply(std::array{valtype::i32, valtype::i32}, std::array{valtype::i32}); break;
-        case i64shl:      stack.apply(std::array{valtype::i64, valtype::i64}, std::array{valtype::i64}); break;
-        case i32shr_s:    stack.apply(std::array{valtype::i32, valtype::i32}, std::array{valtype::i32}); break;
-        case i64shr_s:    stack.apply(std::array{valtype::i64, valtype::i64}, std::array{valtype::i64}); break;
-        case i32shr_u:    stack.apply(std::array{valtype::i32, valtype::i32}, std::array{valtype::i32}); break;
-        case i64shr_u:    stack.apply(std::array{valtype::i64, valtype::i64}, std::array{valtype::i64}); break;
-        case i32rotl:     stack.apply(std::array{valtype::i32, valtype::i32}, std::array{valtype::i32}); break;
-        case i64rotl:     stack.apply(std::array{valtype::i64, valtype::i64}, std::array{valtype::i64}); break;
-        case i32rotr:     stack.apply(std::array{valtype::i32, valtype::i32}, std::array{valtype::i32}); break;
-        case i64rotr:     stack.apply(std::array{valtype::i64, valtype::i64}, std::array{valtype::i64}); break;
-        case f32abs:      stack.apply(std::array{valtype::f32              }, std::array{valtype::f32}); break;
-        case f64abs:      stack.apply(std::array{valtype::f64              }, std::array{valtype::f64}); break;
-        case f32neg:      stack.apply(std::array{valtype::f32              }, std::array{valtype::f32}); break;
-        case f64neg:      stack.apply(std::array{valtype::f64              }, std::array{valtype::f64}); break;
-        case f32ceil:     stack.apply(std::array{valtype::f32              }, std::array{valtype::f32}); break;
-        case f64ceil:     stack.apply(std::array{valtype::f64              }, std::array{valtype::f64}); break;
-        case f32floor:    stack.apply(std::array{valtype::f32              }, std::array{valtype::f32}); break;
-        case f64floor:    stack.apply(std::array{valtype::f64              }, std::array{valtype::f64}); break;
-        case f32trunc:    stack.apply(std::array{valtype::f32              }, std::array{valtype::f32}); break;
-        case f64trunc:    stack.apply(std::array{valtype::f64              }, std::array{valtype::f64}); break;
-        case f32nearest:  stack.apply(std::array{valtype::f32              }, std::array{valtype::f32}); break;
-        case f64nearest:  stack.apply(std::array{valtype::f64              }, std::array{valtype::f64}); break;
-        case f32sqrt:     stack.apply(std::array{valtype::f32              }, std::array{valtype::f32}); break;
-        case f64sqrt:     stack.apply(std::array{valtype::f64              }, std::array{valtype::f64}); break;
-        case f32add:      stack.apply(std::array{valtype::f32, valtype::f32}, std::array{valtype::f32}); break;
-        case f64add:      stack.apply(std::array{valtype::f64, valtype::f64}, std::array{valtype::f64}); break;
-        case f32sub:      stack.apply(std::array{valtype::f32, valtype::f32}, std::array{valtype::f32}); break;
-        case f64sub:      stack.apply(std::array{valtype::f64, valtype::f64}, std::array{valtype::f64}); break;
-        case f32mul:      stack.apply(std::array{valtype::f32, valtype::f32}, std::array{valtype::f32}); break;
-        case f64mul:      stack.apply(std::array{valtype::f64, valtype::f64}, std::array{valtype::f64}); break;
-        case f32div:      stack.apply(std::array{valtype::f32, valtype::f32}, std::array{valtype::f32}); break;
-        case f64div:      stack.apply(std::array{valtype::f64, valtype::f64}, std::array{valtype::f64}); break;
-        case f32min:      stack.apply(std::array{valtype::f32, valtype::f32}, std::array{valtype::f32}); break;
-        case f64min:      stack.apply(std::array{valtype::f64, valtype::f64}, std::array{valtype::f64}); break;
-        case f32max:      stack.apply(std::array{valtype::f32, valtype::f32}, std::array{valtype::f32}); break;
-        case f64max:      stack.apply(std::array{valtype::f64, valtype::f64}, std::array{valtype::f64}); break;
-        case f32copysign: stack.apply(std::array{valtype::f32, valtype::f32}, std::array{valtype::f32}); break;
-        case f64copysign: stack.apply(std::array{valtype::f64, valtype::f64}, std::array{valtype::f64}); break;
-        case i32wrap_i64:      stack.apply(std::array{valtype::i64}, std::array{valtype::i32}); break;
-        case i64extend_i32_s:  stack.apply(std::array{valtype::i32}, std::array{valtype::i64}); break;
-        case i64extend_i32_u:  stack.apply(std::array{valtype::i32}, std::array{valtype::i64}); break;
-        case i32trunc_f32_s:   stack.apply(std::array{valtype::f32}, std::array{valtype::i32}); break;
-        case i64trunc_f32_s:   stack.apply(std::array{valtype::f32}, std::array{valtype::i64}); break;
-        case i32trunc_f32_u:   stack.apply(std::array{valtype::f32}, std::array{valtype::i32}); break;
-        case i64trunc_f32_u:   stack.apply(std::array{valtype::f32}, std::array{valtype::i64}); break;
-        case i32trunc_f64_s:   stack.apply(std::array{valtype::f64}, std::array{valtype::i32}); break;
-        case i64trunc_f64_s:   stack.apply(std::array{valtype::f64}, std::array{valtype::i64}); break;
-        case i32trunc_f64_u:   stack.apply(std::array{valtype::f64}, std::array{valtype::i32}); break;
-        case i64trunc_f64_u:   stack.apply(std::array{valtype::f64}, std::array{valtype::i64}); break;
-        case f32convert_i32_s: stack.apply(std::array{valtype::i32}, std::array{valtype::f32}); break;
-        case f64convert_i32_s: stack.apply(std::array{valtype::i32}, std::array{valtype::f64}); break;
-        case f32convert_i32_u: stack.apply(std::array{valtype::i32}, std::array{valtype::f32}); break;
-        case f64convert_i32_u: stack.apply(std::array{valtype::i32}, std::array{valtype::f64}); break;
-        case f32convert_i64_s: stack.apply(std::array{valtype::i64}, std::array{valtype::f32}); break;
-        case f64convert_i64_s: stack.apply(std::array{valtype::i64}, std::array{valtype::f64}); break;
-        case f32convert_i64_u: stack.apply(std::array{valtype::i64}, std::array{valtype::f32}); break;
-        case f64convert_i64_u: stack.apply(std::array{valtype::i64}, std::array{valtype::f64}); break;
-        case f32demote_f64:    stack.apply(std::array{valtype::f64}, std::array{valtype::f32}); break;
-        case f64promote_f32:   stack.apply(std::array{valtype::f32}, std::array{valtype::f64}); break;
-        case i32reinterpret_f32: stack.apply(std::array{valtype::f32}, std::array{valtype::i32}); break;
-        case f32reinterpret_i32: stack.apply(std::array{valtype::i32}, std::array{valtype::f32}); break;
-        case i64reinterpret_f64: stack.apply(std::array{valtype::f64}, std::array{valtype::i64}); break;
-        case f64reinterpret_i64: stack.apply(std::array{valtype::i64}, std::array{valtype::f64}); break;
-        case i32extend8_s:  stack.apply(std::array{valtype::i32}, std::array{valtype::i32}); break;
-        case i32extend16_s: stack.apply(std::array{valtype::i32}, std::array{valtype::i32}); break;
-        case i64extend8_s:  stack.apply(std::array{valtype::i64}, std::array{valtype::i64}); break;
-        case i64extend16_s: stack.apply(std::array{valtype::i64}, std::array{valtype::i64}); break;
-        case i64extend32_s: stack.apply(std::array{valtype::i64}, std::array{valtype::i64}); break;
-        case ref_null: {
-            auto type_idx = safe_read_leb128<uint32_t>(iter);
-            ensure(is_reftype(type_idx), "type mismatch");
-            stack.apply(std::array<valtype, 0>(), std::array{static_cast<valtype>(type_idx)});
-            break;
-        }
-        case ref_is_null: {
-            auto peek = stack.back();
-            ensure(peek == valtype::any || is_reftype(peek), "type mismatch");
-            stack.apply(std::array{peek}, std::array{valtype::i32});
-            break;
-        }
-        case ref_func: {
-            auto func_idx = safe_read_leb128<uint32_t>(iter);
-            ensure(func_idx < functions.size(), "invalid function index");
-            ensure(functions[func_idx].is_declared, "undeclared function reference");
-            stack.apply(std::array<valtype, 0>(), std::array{valtype::funcref});
-            break;
-        }
-        case ref_eq: {
-            auto peek = stack.back();
-            ensure(peek == valtype::any || is_reftype(peek), "type mismatch");
-            stack.apply(std::array{peek, peek}, std::array{valtype::i32});
-            break;
-        }
-        case multibyte: {
-            auto byte = safe_read_leb128<uint32_t>(iter);
-#if WASM_DEBUG
-            std::cerr << "reading multibyte instruction " << multibyte_instructions[byte].c_str()
-                      << " at " << iter - bytes.get() << std::endl;
-#endif
-
-            using enum FCInstruction;
-            switch (static_cast<FCInstruction>(byte)) {
-                case i32_trunc_sat_f32_s:
-                    stack.apply(std::array{valtype::f32}, std::array{valtype::i32});
-                    break;
-                case i32_trunc_sat_f32_u:
-                    stack.apply(std::array{valtype::f32}, std::array{valtype::i32});
-                    break;
-                case i32_trunc_sat_f64_s:
-                    stack.apply(std::array{valtype::f64}, std::array{valtype::i32});
-                    break;
-                case i32_trunc_sat_f64_u:
-                    stack.apply(std::array{valtype::f64}, std::array{valtype::i32});
-                    break;
-                case i64_trunc_sat_f32_s:
-                    stack.apply(std::array{valtype::f32}, std::array{valtype::i64});
-                    break;
-                case i64_trunc_sat_f32_u:
-                    stack.apply(std::array{valtype::f32}, std::array{valtype::i64});
-                    break;
-                case i64_trunc_sat_f64_s:
-                    stack.apply(std::array{valtype::f64}, std::array{valtype::i64});
-                    break;
-                case i64_trunc_sat_f64_u:
-                    stack.apply(std::array{valtype::f64}, std::array{valtype::i64});
-                    break;
-                case memory_init: {
-                    auto seg_idx = safe_read_leb128<uint32_t>(iter);
-                    if (*iter++ != 0) error<malformed_error>("zero byte expected");
-
-                    ensure(memory.exists, "unknown memory 0");
-                    if (n_data == std::numeric_limits<uint32_t>::max()) {
-                        error<malformed_error>("data count section required");
-                    }
-                    ensure(seg_idx < n_data, "unknown data segment");
-
-                    stack.apply(std::array{valtype::i32, valtype::i32, valtype::i32}, std::array<valtype, 0>());
-                    break;
-                }
-                case data_drop: {
-                    auto seg_idx = safe_read_leb128<uint32_t>(iter);
-                    if (n_data == std::numeric_limits<uint32_t>::max()) {
-                        error<malformed_error>("data count section required");
-                    }
-                    ensure(seg_idx < n_data, "unknown data segment");
-                    break;
-                }
-                case memory_copy: {
-                    if (*iter++ != 0) error<malformed_error>("zero byte expected");
-                    if (*iter++ != 0) error<malformed_error>("zero byte expected");
-                    ensure(memory.exists, "unknown memory 0");
-
-                    stack.apply(std::array{valtype::i32, valtype::i32, valtype::i32}, std::array<valtype, 0>());
-                    break;
-                }
-                case memory_fill: {
-                    if (*iter++ != 0) error<malformed_error>("zero byte expected");
-                    ensure(memory.exists, "unknown memory 0");
-
-                    stack.apply(std::array{valtype::i32, valtype::i32, valtype::i32}, std::array<valtype, 0>());
-                    break;
-                }
-                case table_init: {
-                    auto seg_idx = safe_read_leb128<uint32_t>(iter);
-                    auto table_idx = safe_read_leb128<uint32_t>(iter);
-
-                    ensure(table_idx < tables.size(), "unknown table");
-                    ensure(seg_idx < elements.size(), "unknown data segment");
-                    ensure(tables[table_idx].type == elements[seg_idx].type, "type mismatch");
-
-                    stack.apply(std::array{valtype::i32, valtype::i32, valtype::i32}, std::array<valtype, 0>());
-                    break;
-                }
-                case elem_drop: {
-                    auto seg_idx = safe_read_leb128<uint32_t>(iter);
-                    ensure(seg_idx < elements.size(), "unknown elem segment");
-                    break;
-                }
-                case table_copy: {
-                    auto src_table_idx = safe_read_leb128<uint32_t>(iter);
-                    ensure(src_table_idx < tables.size(), "unknown table");
-                    auto dst_table_idx = safe_read_leb128<uint32_t>(iter);
-                    ensure(dst_table_idx < tables.size(), "unknown table");
-                    ensure(tables[src_table_idx].type == tables[dst_table_idx].type, "type mismatch");
-
-                    stack.apply(std::array{valtype::i32, valtype::i32, valtype::i32}, std::array<valtype, 0>());
-                    break;
-                }
-                case table_grow: {
-                    auto table_idx = safe_read_leb128<uint32_t>(iter);
-                    ensure(table_idx < tables.size(), "unknown table");
-
-                    stack.apply(std::array{tables[table_idx].type, valtype::i32}, std::array{valtype::i32});
-                    break;
-                }
-                case table_size: {
-                    auto table_idx = safe_read_leb128<uint32_t>(iter);
-                    ensure(table_idx < tables.size(), "unknown table");
-
-                    stack.apply(std::array<valtype, 0>(), std::array{valtype::i32});
-                    break;
-                }
-                case table_fill: {
-                    auto table_idx = safe_read_leb128<uint32_t>(iter);
-                    ensure(table_idx < tables.size(), "unknown table");
-
-                    stack.apply(std::array{valtype::i32, tables[table_idx].type, valtype::i32}, std::array<valtype, 0>());
-                    break;
-                }
-                default: ensure(false, "unimplemented FC extension instruction");
-            }
-            break;
-        }
-        default: ensure(false, "unimplemented instruction");
-            // clang-format on
-        };
-    }
-
-    ensure(false, "unreachable");
+    return funcs[*iter++](*this, iter, fn, stack, control_stack);
 }
 
 #undef ensure

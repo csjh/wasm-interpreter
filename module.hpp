@@ -410,9 +410,18 @@ struct ControlFlow {
     std::variant<Function, Block, Loop, If, IfElse> construct;
 };
 
+class Module;
+class WasmStack;
+using ValidationHandler = void(Module &, safe_byte_iterator &, FunctionShell &,
+                               WasmStack &, std::vector<ControlFlow> &);
+
 // should return a shared_ptr to itself for easier lifetimes
 class Module {
     friend class Instance;
+#define V(name, _, byte) friend ValidationHandler validate_##name;
+    FOREACH_INSTRUCTION(V)
+    FOREACH_MULTIBYTE_INSTRUCTION(V)
+#undef V
 
     std::weak_ptr<Module> self;
 
