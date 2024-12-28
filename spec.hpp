@@ -6,6 +6,11 @@
 #include <vector>
 
 namespace mitey {
+template <typename Err>
+[[noreturn]] static void __attribute__((preserve_most)) error(const char *msg) {
+    throw Err(msg);
+}
+
 class malformed_error : public std::runtime_error {
   public:
     malformed_error(const std::string &msg) : std::runtime_error(msg) {}
@@ -62,8 +67,8 @@ static std::string valtype_names[] = {
     [static_cast<uint8_t>(valtype::externref)] = "externref"};
 #endif
 
-[[noreturn]] static inline void trap(std::string message) {
-    throw trap_error(message);
+[[noreturn]] static inline void trap(const char *message) {
+    error<trap_error>(message);
 }
 
 static inline bool is_reftype(uint32_t byte) {
@@ -203,17 +208,17 @@ static inline T safe_read_sleb128(Iter &iter) {
     Iter start = iter;
     int64_t result = read_sleb128<BITS>(iter);
     if (result > static_cast<int64_t>((1ULL << (BITS - 1)) - 1)) {
-        throw malformed_error("integer too large");
+        error<malformed_error>("integer too large");
     }
     if (result < static_cast<int64_t>(-(1ULL << (BITS - 1)))) {
-        throw malformed_error("integer too large");
+        error<malformed_error>("integer too large");
     }
     if (static_cast<uint64_t>(iter - start) >
         static_cast<uint64_t>(1 + BITS / 7)) {
-        throw malformed_error("integer representation too long");
+        error<malformed_error>("integer representation too long");
     }
     if (((iter[-1] != 0 && iter[-1] != 127) + (iter - start - 1) * 7) >= BITS) {
-        throw malformed_error("integer too large");
+        error<malformed_error>("integer too large");
     }
     return static_cast<T>(result);
 }
@@ -236,10 +241,10 @@ static inline T safe_read_leb128(Iter &iter) {
     uint64_t result = read_leb128(iter);
     if (static_cast<uint64_t>(iter - start) >
         static_cast<uint64_t>(1 + BITS / 7)) {
-        throw malformed_error("integer representation too long");
+        error<malformed_error>("integer representation too long");
     }
     if (sizeof(T) != 8 && result > (1ULL << BITS) - 1) {
-        throw malformed_error("integer too large");
+        error<malformed_error>("integer too large");
     }
     return static_cast<T>(result);
 }

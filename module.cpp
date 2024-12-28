@@ -9,11 +9,6 @@
 #endif
 
 namespace mitey {
-template <typename Err>
-[[noreturn]] static void __attribute__((preserve_most)) error(const char *msg) {
-    throw Err(msg);
-}
-
 safe_byte_iterator::safe_byte_iterator(uint8_t *begin, uint8_t *end)
     : iter(begin), end(end) {}
 

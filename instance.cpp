@@ -54,16 +54,16 @@ void Instance::initialize(const Imports &imports) {
     auto get_import = [&](const ImportSpecifier &specifier) -> ExportValue {
         auto [module_name, field_name] = specifier;
         if (!imports.contains(module_name)) {
-            throw link_error("unknown import");
+            error<link_error>("unknown import");
         }
         auto &import_module = imports.at(module_name);
         if (!import_module.contains(field_name)) {
-            throw link_error("unknown import");
+            error<link_error>("unknown import");
         }
         auto &import = import_module.at(field_name);
         if (static_cast<mitey::ImExDesc>(import.index()) !=
             module->imports.at(module_name).at(field_name)) {
-            throw link_error("incompatible import type");
+            error<link_error>("incompatible import type");
         }
         return import;
     };
@@ -75,7 +75,7 @@ void Instance::initialize(const Imports &imports) {
 
             if (imported_memory->size() < module->memory.min ||
                 imported_memory->max() > module->memory.max) {
-                throw link_error("incompatible import type");
+                error<link_error>("incompatible import type");
             }
 
             memory = imported_memory;
@@ -93,7 +93,7 @@ void Instance::initialize(const Imports &imports) {
 
             if (imported_function.type !=
                 RuntimeType::from_signature(fn.type)) {
-                throw link_error("incompatible import type");
+                error<link_error>("incompatible import type");
             }
 
             functions[i] = imported_function;
@@ -115,7 +115,7 @@ void Instance::initialize(const Imports &imports) {
 
             if (imported_global->type != global.type ||
                 imported_global->_mut != global.mutability) {
-                throw link_error("incompatible import type");
+                error<link_error>("incompatible import type");
             }
 
             globals[i] = imported_global;
@@ -135,7 +135,7 @@ void Instance::initialize(const Imports &imports) {
             if (imported_table->size() < table.min ||
                 imported_table->max() > table.max ||
                 imported_table->type != table.type) {
-                throw link_error("incompatible import type");
+                error<link_error>("incompatible import type");
             }
 
             tables[i] = imported_table;
@@ -201,7 +201,7 @@ void Instance::initialize(const Imports &imports) {
             uint16_t reftype_or_elemkind = flags & 0b10 ? *iter++ : 256;
             uint32_t n_elements = read_leb128(iter);
             if (offset + n_elements > table->size()) {
-                throw uninstantiable_error("out of bounds table access");
+                error<uninstantiable_error>("out of bounds table access");
             }
 
             std::vector<WasmValue> elem(n_elements);
@@ -217,7 +217,7 @@ void Instance::initialize(const Imports &imports) {
                     WasmValue ref = interpret_const(iter);
                     elem[j] = ref;
                     if (offset + j >= table->size()) {
-                        throw uninstantiable_error(
+                        error<uninstantiable_error>(
                             "out of bounds table access");
                     }
                     table->set(offset + j, ref);
@@ -234,7 +234,7 @@ void Instance::initialize(const Imports &imports) {
                     WasmValue funcref = &functions[elem_idx];
                     elem[j] = funcref;
                     if (offset + j >= table->size()) {
-                        throw uninstantiable_error(
+                        error<uninstantiable_error>(
                             "out of bounds table access");
                     }
                     table->set(offset + j, funcref);
@@ -251,7 +251,7 @@ void Instance::initialize(const Imports &imports) {
             try {
                 memory->copy_into(offset, 0, data, data.data.size());
             } catch (const trap_error &e) {
-                throw uninstantiable_error(e.what());
+                error<uninstantiable_error>(e.what());
             }
 
             data_segments[i] = {};
@@ -280,12 +280,12 @@ void Instance::initialize(const Imports &imports) {
     if (module->start != std::numeric_limits<uint32_t>::max()) {
         const auto &fn = functions[module->start];
         if (fn.type.n_params || fn.type.n_results) {
-            throw validation_error("start function");
+            error<validation_error>("start function");
         }
         try {
             entrypoint(fn, initial_stack, initial_control_stack);
         } catch (const trap_error &e) {
-            throw uninstantiable_error(e.what());
+            error<uninstantiable_error>(e.what());
         }
     }
 }

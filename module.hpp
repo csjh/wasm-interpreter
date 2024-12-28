@@ -95,7 +95,7 @@ union RuntimeType {
                 break;
             case valtype::null:
             case valtype::any:
-                throw std::runtime_error("invalid result type");
+                error<std::runtime_error>("invalid result type");
             }
             type.hash *= 16777619;
             type.hash ^= static_cast<uint64_t>(param);
@@ -123,7 +123,7 @@ union RuntimeType {
                 break;
             case valtype::null:
             case valtype::any:
-                throw std::runtime_error("invalid result type");
+                error<std::runtime_error>("invalid result type");
             }
             type.hash *= 31;
             type.hash ^= static_cast<uint64_t>(result);
