@@ -782,8 +782,7 @@ HANDLER(drop) {
 }
 HANDLER(select) {
     stack -= 2;
-    if (!stack[1].i32)
-        stack[-1] = stack[0];
+    stack[-1] = stack[-!!stack[1].u32];
     nextop();
 }
 HANDLER(select_t) {
@@ -791,8 +790,7 @@ HANDLER(select_t) {
     // skip result types
     iter++;
     stack -= 2;
-    if (!stack[1].i32)
-        stack[-1] = stack[0];
+    stack[-1] = stack[-!!stack[1].u32];
     nextop();
 }
 HANDLER(localget) {
