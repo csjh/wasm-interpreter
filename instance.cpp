@@ -468,6 +468,11 @@ using u64 = uint64_t;
 using f32 = float;
 using f64 = double;
 
+static void __attribute__((noinline, preserve_most))
+slow_memmove(WasmValue *dst, const WasmValue *src, size_t n) {
+    std::memmove(dst, src, n * sizeof(WasmValue));
+}
+
 /*
     (functions and ifs are blocks)
 
@@ -485,8 +490,7 @@ static inline bool brk(Instance &, uint8_t *&iter, tape<WasmValue> &stack,
     stack -= target.arity;
     std::memmove(target.stack, stack.unsafe_ptr(), sizeof(WasmValue));
     if (target.arity > 1) [[unlikely]] {
-        std::memmove(target.stack, stack.unsafe_ptr(),
-                     target.arity * sizeof(WasmValue));
+        slow_memmove(target.stack, stack.unsafe_ptr(), target.arity);
     }
     stack = target.stack + target.arity;
     iter = target.dest;
