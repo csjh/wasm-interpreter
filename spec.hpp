@@ -138,10 +138,11 @@ static inline bool is_mut(uint8_t byte) {
 }
 
 // from https://stackoverflow.com/a/28311607
-static inline bool is_valid_utf8(const uint8_t *bytes, const uint8_t *end) {
+static inline bool is_valid_utf8(const uint8_t *bytes, size_t length) {
     if (!bytes)
         return true;
 
+    const uint8_t *end = bytes + length;
     unsigned int cp;
     int num;
 

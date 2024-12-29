@@ -9,8 +9,11 @@
 #endif
 
 namespace mitey {
-safe_byte_iterator::safe_byte_iterator(uint8_t *begin, uint8_t *end)
-    : iter(begin), end(end) {}
+safe_byte_iterator::safe_byte_iterator(uint8_t *ptr, size_t length)
+    : iter(ptr), end(ptr + length) {}
+
+safe_byte_iterator::safe_byte_iterator(uint8_t *ptr, uint8_t *end)
+    : iter(ptr), end(end) {}
 
 uint8_t safe_byte_iterator::operator*() const {
     if (iter >= end) {
@@ -27,31 +30,19 @@ uint8_t safe_byte_iterator::operator[](ssize_t n) const {
 }
 
 safe_byte_iterator &safe_byte_iterator::operator++() {
-    if (iter == end) {
-        error<malformed_error>("unexpected end");
-    }
     ++iter;
     return *this;
 }
 
 safe_byte_iterator safe_byte_iterator::operator++(int) {
-    if (iter == end) {
-        error<malformed_error>("unexpected end");
-    }
     return safe_byte_iterator(iter++, end);
 }
 
 safe_byte_iterator safe_byte_iterator::operator+(size_t n) const {
-    if (iter + n > end) {
-        error<malformed_error>("length out of bounds");
-    }
     return safe_byte_iterator(iter + n, end);
 }
 
 safe_byte_iterator &safe_byte_iterator::operator+=(size_t n) {
-    if (iter + n > end) {
-        error<malformed_error>("unexpected end");
-    }
     iter += n;
     return *this;
 }
@@ -242,7 +233,7 @@ void Module::initialize(uint32_t length) {
         error<malformed_error>("unexpected end");
     }
 
-    safe_byte_iterator iter(bytes.get(), bytes.get() + length);
+    safe_byte_iterator iter(bytes.get(), length);
 
     if (std::memcmp(reinterpret_cast<char *>(iter.get_with_at_least(4)),
                     "\0asm", 4) != 0) {
@@ -263,11 +254,15 @@ void Module::initialize(uint32_t length) {
         while (!iter.empty() && *iter == 0) [[unlikely]] {
             ++iter;
             auto section_length = safe_read_leb128<uint32_t>(iter);
+            if (!iter.has_n_left(section_length)) {
+                error<malformed_error>("length out of bounds");
+            }
+
             auto start = iter;
 
             auto name_length = safe_read_leb128<uint32_t>(iter);
             if (!is_valid_utf8(iter.get_with_at_least(name_length),
-                               (iter + name_length).unsafe_ptr())) {
+                                   name_length)) {
                 error<malformed_error>("malformed UTF-8 encoding");
             }
 
@@ -367,7 +362,7 @@ void Module::initialize(uint32_t length) {
 
             auto module_len = safe_read_leb128<uint32_t>(iter);
             if (!is_valid_utf8(iter.get_with_at_least(module_len),
-                               (iter + module_len).unsafe_ptr())) {
+                                   module_len)) {
                 error<malformed_error>("malformed UTF-8 encoding");
             }
             std::string module(
@@ -376,8 +371,7 @@ void Module::initialize(uint32_t length) {
             iter += module_len;
 
             auto field_len = safe_read_leb128<uint32_t>(iter);
-            if (!is_valid_utf8(iter.get_with_at_least(field_len),
-                               (iter + field_len).unsafe_ptr())) {
+            if (!is_valid_utf8(iter.get_with_at_least(field_len), field_len)) {
                 error<malformed_error>("malformed UTF-8 encoding");
             }
             std::string field(
@@ -774,7 +768,7 @@ void Module::initialize(uint32_t length) {
                 auto function_length = safe_read_leb128<uint32_t>(iter);
 
                 auto start = safe_byte_iterator(
-                    iter.unsafe_ptr(), iter.unsafe_ptr() + function_length);
+                    iter.get_with_at_least(function_length), function_length);
 
                 auto n_local_decls = safe_read_leb128<uint32_t>(iter);
                 while (n_local_decls--) {

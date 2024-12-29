@@ -293,7 +293,8 @@ class safe_byte_iterator {
     uint8_t *end;
 
   public:
-    safe_byte_iterator(uint8_t *begin, uint8_t *end);
+    safe_byte_iterator(uint8_t *ptr, size_t length);
+    safe_byte_iterator(uint8_t *ptr, uint8_t *end);
 
     uint8_t operator*() const;
     uint8_t operator[](ssize_t n) const;
