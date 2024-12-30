@@ -318,10 +318,10 @@ WasmValue Instance::interpret_const(uint8_t *&iter) {
         }
         switch (static_cast<Instruction>(byte)) {
         case i32const:
-            stack.push_back((int32_t)read_sleb128<32>(iter));
+            stack.push_back((int32_t)read_sleb128(iter));
             break;
         case i64const:
-            stack.push_back((int64_t)read_sleb128<64>(iter));
+            stack.push_back((int64_t)read_sleb128(iter));
             break;
         case f32const: {
             float x;
@@ -837,11 +837,11 @@ HANDLER(memorygrow) {
     nextop();
 }
 HANDLER(i32const) {
-    stack.push((int32_t)read_sleb128<32>(iter));
+    stack.push((int32_t)read_sleb128(iter));
     nextop();
 }
 HANDLER(i64const) {
-    stack.push((int64_t)read_sleb128<64>(iter));
+    stack.push((int64_t)read_sleb128(iter));
     nextop();
 }
 HANDLER(f32const) {

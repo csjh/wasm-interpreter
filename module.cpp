@@ -1060,7 +1060,7 @@ FOREACH_INSTRUCTION(V)
     do {                                                                       \
         auto byte = *iter++;                                                   \
         std::cerr << "reading instruction " << instructions[byte].c_str()      \
-                  << " at " << iter - bytes.get() << std::endl;                \
+                  << " at " << iter - mod.bytes.get() << std::endl;            \
         std::cerr << "control stack size: " << control_stack.size()            \
                   << std::endl;                                                \
         std::cerr << "control stack: ";                                        \

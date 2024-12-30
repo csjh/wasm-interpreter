@@ -188,8 +188,7 @@ static inline bool is_valid_utf8(const uint8_t *bytes, size_t length) {
     return bytes == end;
 }
 
-template <uint8_t BITS, typename Iter>
-static inline int64_t read_sleb128(Iter &iter) {
+template <typename Iter> static inline int64_t read_sleb128(Iter &iter) {
     int64_t result = 0;
     uint64_t shift = 0;
     uint64_t byte;
@@ -207,7 +206,7 @@ static inline int64_t read_sleb128(Iter &iter) {
 template <typename T, uint8_t BITS = sizeof(T) * 8, typename Iter>
 static inline T safe_read_sleb128(Iter &iter) {
     Iter start = iter;
-    int64_t result = read_sleb128<BITS>(iter);
+    int64_t result = read_sleb128(iter);
     if (result > static_cast<int64_t>((1ULL << (BITS - 1)) - 1)) {
         error<malformed_error>("integer too large");
     }
