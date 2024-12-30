@@ -262,7 +262,7 @@ void Module::initialize(uint32_t length) {
 
             auto name_length = safe_read_leb128<uint32_t>(iter);
             if (!is_valid_utf8(iter.get_with_at_least(name_length),
-                                   name_length)) {
+                               name_length)) {
                 error<malformed_error>("malformed UTF-8 encoding");
             }
 
@@ -362,7 +362,7 @@ void Module::initialize(uint32_t length) {
 
             auto module_len = safe_read_leb128<uint32_t>(iter);
             if (!is_valid_utf8(iter.get_with_at_least(module_len),
-                                   module_len)) {
+                               module_len)) {
                 error<malformed_error>("malformed UTF-8 encoding");
             }
             std::string module(
