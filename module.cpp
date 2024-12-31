@@ -1,6 +1,7 @@
 #include "module.hpp"
 #include "instance.hpp"
 #include "spec.hpp"
+#include <algorithm>
 #include <limits>
 #include <variant>
 
@@ -1087,11 +1088,20 @@ FOREACH_INSTRUCTION(V)
     } while (0)
 #endif
 
-static ValidationHandler *funcs[] = {
-#define V(name, _, byte) [byte] = &validate_##name,
+HANDLER(missing) { error<malformed_error>("unknown instruction"); }
+
+consteval std::array<ValidationHandler *, 256> make_funcs() {
+    std::array<ValidationHandler *, 256> funcs{};
+    funcs.fill(&validate_missing);
+
+#define V(name, _, byte) funcs[byte] = &validate_##name;
     FOREACH_INSTRUCTION(V)
 #undef V
-};
+
+    return funcs;
+}
+
+static auto funcs = make_funcs();
 
 HANDLER(unreachable) {
     stack.polymorphize();
@@ -1658,12 +1668,20 @@ HANDLER(table_fill) {
         std::array<valtype, 0>());
     nextop();
 }
-HANDLER(multibyte) {
-    static ValidationHandler *fc_funcs[] = {
-#define V(name, _, byte) [byte] = &validate_##name,
-        FOREACH_MULTIBYTE_INSTRUCTION(V)
+
+consteval std::array<ValidationHandler *, 256> make_fc_funcs() {
+    std::array<ValidationHandler *, 256> funcs{};
+    funcs.fill(&validate_missing);
+
+#define V(name, _, byte) funcs[byte] = &validate_##name;
+    FOREACH_INSTRUCTION(V)
 #undef V
-    };
+
+    return funcs;
+}
+
+HANDLER(multibyte) {
+    static auto fc_funcs = make_fc_funcs();
 
     [[clang::musttail]] return fc_funcs[safe_read_leb128<uint32_t>(iter)](
         mod, iter, fn, stack, control_stack);

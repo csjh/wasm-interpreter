@@ -3,6 +3,7 @@
 #include "spec.hpp"
 #include <algorithm>
 #include <cassert>
+#include <cmath>
 #include <functional>
 #include <limits>
 
@@ -622,8 +623,11 @@ static inline bool brk(Instance &, uint8_t *&iter, tape<WasmValue> &stack,
     } while (0)
 #else
 #define nextop()                                                               \
-    [[clang::musttail]] return handlers[*iter++](instance, iter, stack,        \
-                                                 control_stack)
+    do {                                                                       \
+        uint8_t byte = *iter++;                                                \
+        [[clang::musttail]] return handlers[byte](instance, iter, stack,       \
+                                                  control_stack);              \
+    } while (0)
 #endif
 
 #define DECL_HANDLER(name, str, byte) HANDLER(name);
@@ -631,20 +635,33 @@ FOREACH_INSTRUCTION(DECL_HANDLER)
 FOREACH_MULTIBYTE_INSTRUCTION(DECL_HANDLER)
 #undef DECL_HANDLER
 
-static Handler *handlers[] = {
-#define DEFINE_LABEL(name, _, byte) [byte] = &name,
+consteval std::array<Handler *, 256> make_handlers() {
+    std::array<Handler *, 256> handlers = {};
+
+#define DEFINE_LABEL(name, _, byte) handlers[byte] = &name;
     FOREACH_INSTRUCTION(DEFINE_LABEL)
 #undef DEFINE_LABEL
-};
-static Handler *fc_handlers[] = {
-#define DEFINE_LABEL(name, _, byte) [byte] = &name,
+
+    return handlers;
+}
+
+consteval std::array<Handler *, 256> make_fc_handlers() {
+    std::array<Handler *, 256> handlers = {};
+
+#define DEFINE_LABEL(name, _, byte) handlers[byte] = &name;
     FOREACH_MULTIBYTE_INSTRUCTION(DEFINE_LABEL)
 #undef DEFINE_LABEL
-};
+
+    return handlers;
+}
+
+static auto handlers = make_handlers();
+static auto fc_handlers = make_fc_handlers();
 
 void Instance::interpret(uint8_t *iter, tape<WasmValue> &stack,
                          tape<BrTarget> &control_stack) {
-    return handlers[*iter++](*this, iter, stack, control_stack);
+    uint8_t byte = *iter++;
+    return handlers[byte](*this, iter, stack, control_stack);
 }
 
 HANDLER(unreachable) {

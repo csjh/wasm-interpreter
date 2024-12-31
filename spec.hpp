@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <stdexcept>
 #include <string>
@@ -104,28 +105,35 @@ struct Signature {
     std::vector<valtype> results;
 
     template <typename Types, typename Iter>
-    static Signature &read_blocktype(Types &types, Iter &iter) {
-        constexpr uint8_t empty_type = 0x40;
-        static Signature singles[] = {
-            [0x40] = {{}, {}},
-            [0x7f] = {{}, {valtype::i32}},
-            [0x7e] = {{}, {valtype::i64}},
-            [0x7d] = {{}, {valtype::f32}},
-            [0x7c] = {{}, {valtype::f64}},
-            [0x70] = {{}, {valtype::funcref}},
-            [0x6f] = {{}, {valtype::externref}},
-        };
-
-        uint8_t byte = *iter;
-        if (byte == empty_type || is_valtype(byte)) {
-            ++iter;
-            return singles[byte];
-        } else {
-            int64_t n = safe_read_sleb128<int64_t, 33>(iter);
-            return types[n];
-        }
-    }
+    static Signature &read_blocktype(Types &types, Iter &iter);
 };
+
+static inline std::array<Signature, 256> make_singles() {
+    std::array<Signature, 256> types = {};
+    types[0x40] = {{}, {}};
+    types[0x7f] = {{}, {valtype::i32}};
+    types[0x7e] = {{}, {valtype::i64}};
+    types[0x7d] = {{}, {valtype::f32}};
+    types[0x7c] = {{}, {valtype::f64}};
+    types[0x70] = {{}, {valtype::funcref}};
+    types[0x6f] = {{}, {valtype::externref}};
+    return types;
+}
+
+template <typename Types, typename Iter>
+Signature &Signature::read_blocktype(Types &types, Iter &iter) {
+    constexpr uint8_t empty_type = 0x40;
+    static auto singles = make_singles();
+
+    uint8_t byte = *iter;
+    if (byte == empty_type || is_valtype(byte)) {
+        ++iter;
+        return singles[byte];
+    } else {
+        int64_t n = safe_read_sleb128<int64_t, 33>(iter);
+        return types[n];
+    }
+}
 
 enum class mut {
     const_ = 0x0,
