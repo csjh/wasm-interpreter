@@ -1088,7 +1088,7 @@ FOREACH_INSTRUCTION(V)
     } while (0)
 #endif
 
-HANDLER(missing) { error<malformed_error>("unknown instruction"); }
+HANDLER(missing);
 
 consteval std::array<ValidationHandler *, 256> make_funcs() {
     std::array<ValidationHandler *, 256> funcs{};
@@ -1102,6 +1102,11 @@ consteval std::array<ValidationHandler *, 256> make_funcs() {
 }
 
 static auto funcs = make_funcs();
+
+HANDLER(missing) {
+    error<malformed_error>("unknown instruction");
+    nextop();
+}
 
 HANDLER(unreachable) {
     stack.polymorphize();

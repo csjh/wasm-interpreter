@@ -578,9 +578,9 @@ static inline bool brk(Instance &, uint8_t *&iter, tape<WasmValue> &stack,
     }
 #define TRUNC_SAT(from, to)                                                    \
     {                                                                          \
-        if (stack[-1].from < std::numeric_limits<to>::min()) {                 \
+        if (stack[-1].from < (from)std::numeric_limits<to>::min()) {           \
             stack[-1].to = std::numeric_limits<to>::min();                     \
-        } else if (stack[-1].from > std::numeric_limits<to>::max()) {          \
+        } else if (stack[-1].from > (from)std::numeric_limits<to>::max()) {    \
             stack[-1].to = std::numeric_limits<to>::max();                     \
         } else {                                                               \
             stack[-1].to = static_cast<to>(stack[-1].from);                    \

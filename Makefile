@@ -1,6 +1,6 @@
 DEBUG := 0
 
-CFLAGS := -Wall -Wextra -std=c++20
+CFLAGS := -Wall -Wextra -Wpedantic -std=c++20 -Wno-attributes
 
 debug: CFLAGS += -Og -g3 -DWASM_DEBUG -fsanitize=address,undefined
 release: CFLAGS += -O2
@@ -17,10 +17,10 @@ main.o: main.cpp
 	clang++ main.cpp -c $(CFLAGS)
 
 tests: instance.o module.o ./test/executor.cpp
-	clang++ test/executor.cpp instance.o module.o -o test/executor $(CFLAGS)
+	clang++ test/executor.cpp instance.o module.o -o test/executor $(CFLAGS) -lc++
 
 executable: instance.o module.o main.o
-	clang++ instance.o module.o main.o -o main $(CFLAGS)
+	clang++ instance.o module.o main.o -o main $(CFLAGS) -lc++
 
 clean:
 	rm -f *.o

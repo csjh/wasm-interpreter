@@ -419,6 +419,7 @@ using ValidationHandler = void(Module &, safe_byte_iterator &, FunctionShell &,
 // should return a shared_ptr to itself for easier lifetimes
 class Module {
     friend class Instance;
+    friend ValidationHandler validate_missing;
 #define V(name, _, byte) friend ValidationHandler validate_##name;
     FOREACH_INSTRUCTION(V)
     FOREACH_MULTIBYTE_INSTRUCTION(V)
