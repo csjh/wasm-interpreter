@@ -55,11 +55,13 @@ void Instance::initialize(const Imports &imports) {
     auto get_import = [&](const ImportSpecifier &specifier) -> ExportValue {
         auto [module_name, field_name] = specifier;
         if (!imports.contains(module_name)) {
-            error<link_error>("unknown import");
+            auto msg = "unknown import " + module_name;
+            error<link_error>(msg);
         }
         auto &import_module = imports.at(module_name);
         if (!import_module.contains(field_name)) {
-            error<link_error>("unknown import");
+            auto msg = "unknown import " + module_name + "." + field_name;
+            error<link_error>(msg);
         }
         auto &import = import_module.at(field_name);
         if (static_cast<mitey::ImExDesc>(import.index()) !=

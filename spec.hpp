@@ -12,6 +12,11 @@ template <typename Err>
     throw Err(msg);
 }
 
+template <typename Err>
+[[noreturn]] static void __attribute__((preserve_most)) error(std::string msg) {
+    throw Err(msg);
+}
+
 class malformed_error : public std::runtime_error {
   public:
     malformed_error(const std::string &msg) : std::runtime_error(msg) {}
