@@ -309,8 +309,8 @@ WasmValue Instance::interpret_const(uint8_t *&iter) {
     while (1) {
         uint8_t byte = *iter++;
 #ifdef WASM_DEBUG
-        std::cerr << "reading instruction " << instructions[byte].c_str()
-                  << " at " << iter - module->bytes.get() << std::endl;
+        std::cerr << "reading instruction " << instructions[byte] << " at "
+                  << iter - module->bytes.get() << std::endl;
 #endif
 
         using enum Instruction;
@@ -610,7 +610,7 @@ static inline bool brk(Instance &, uint8_t *&iter, tape<WasmValue> &stack,
 #define nextop()                                                               \
     do {                                                                       \
         uint8_t byte = *iter++;                                                \
-        std::cerr << "reading instruction " << instructions[byte].c_str()      \
+        std::cerr << "reading instruction " << instructions[byte]              \
                   << std::endl;                                                \
         std::cerr << "stack contents: ";                                       \
         for (WasmValue *p = instance.frame.locals; p < stack.unsafe_ptr();     \
@@ -740,7 +740,7 @@ HANDLER(br_if) {
 HANDLER(br_table) {
     uint32_t v = stack.pop().u32;
     uint32_t n_targets = read_leb128(iter);
-    uint32_t target, depth = std::numeric_limits<uint32_t>::max();
+    uint32_t target = -1, depth = std::numeric_limits<uint32_t>::max();
 
     // <= because there's an extra for the default target
     for (uint32_t i = 0; i <= n_targets; ++i) {
@@ -1048,7 +1048,7 @@ HANDLER(ref_eq) { BINARY_OP(externref, ==); }
 HANDLER(multibyte) {
     uint8_t byte = *iter++;
 #ifdef WASM_DEBUG
-    std::cerr << "reading multibyte instruction " << multibyte_instructions[byte].c_str() << std::endl;        \
+    std::cerr << "reading multibyte instruction " << multibyte_instructions[byte] << std::endl;        \
     std::cerr << "stack contents: ";                                       \
     for (WasmValue *p = instance.frame.locals; p < stack.unsafe_ptr(); p++) {       \
         std::cerr << p->u64 << " ";                                        \

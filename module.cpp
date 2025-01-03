@@ -125,8 +125,8 @@ void Module::validate_const(safe_byte_iterator &iter, valtype expected) {
     while (1) {
         auto byte = *iter++;
 #ifdef WASM_DEBUG
-        std::cerr << "reading instruction " << instructions[byte].c_str()
-                  << " at " << iter - bytes.get() << std::endl;
+        std::cerr << "reading instruction " << instructions[byte] << " at "
+                  << iter - bytes.get() << std::endl;
 #endif
 
         using enum Instruction;
@@ -1060,8 +1060,8 @@ FOREACH_INSTRUCTION(V)
 #define nextop()                                                               \
     do {                                                                       \
         auto byte = *iter++;                                                   \
-        std::cerr << "reading instruction " << instructions[byte].c_str()      \
-                  << " at " << iter - mod.bytes.get() << std::endl;            \
+        std::cerr << "reading instruction " << instructions[byte] << " at "    \
+                  << iter - mod.bytes.get() << std::endl;                      \
         std::cerr << "control stack size: " << control_stack.size()            \
                   << std::endl;                                                \
         std::cerr << "control stack: ";                                        \
@@ -1072,8 +1072,7 @@ FOREACH_INSTRUCTION(V)
         std::cerr << "stack size: " << stack.size() << std::endl;              \
         std::cerr << "stack: ";                                                \
         for (auto &ty : stack) {                                               \
-            std::cerr << valtype_names[static_cast<uint8_t>(ty)].c_str()       \
-                      << " ";                                                  \
+            std::cerr << valtype_names[static_cast<uint8_t>(ty)] << " ";       \
         }                                                                      \
         std::cerr << std::endl;                                                \
         std::cerr << std::endl;                                                \

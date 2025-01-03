@@ -57,15 +57,20 @@ enum class valtype : uint8_t {
 };
 
 #ifdef WASM_DEBUG
-static std::string valtype_names[] = {
-    [static_cast<uint8_t>(valtype::null)] = "null",
-    [static_cast<uint8_t>(valtype::any)] = "any",
-    [static_cast<uint8_t>(valtype::i32)] = "i32",
-    [static_cast<uint8_t>(valtype::i64)] = "i64",
-    [static_cast<uint8_t>(valtype::f32)] = "f32",
-    [static_cast<uint8_t>(valtype::f64)] = "f64",
-    [static_cast<uint8_t>(valtype::funcref)] = "funcref",
-    [static_cast<uint8_t>(valtype::externref)] = "externref"};
+consteval auto make_valtype_names() {
+    std::array<std::string_view, 256> names = {};
+    names[static_cast<uint8_t>(valtype::null)] = "null";
+    names[static_cast<uint8_t>(valtype::any)] = "any";
+    names[static_cast<uint8_t>(valtype::i32)] = "i32";
+    names[static_cast<uint8_t>(valtype::i64)] = "i64";
+    names[static_cast<uint8_t>(valtype::f32)] = "f32";
+    names[static_cast<uint8_t>(valtype::f64)] = "f64";
+    names[static_cast<uint8_t>(valtype::funcref)] = "funcref";
+    names[static_cast<uint8_t>(valtype::externref)] = "externref";
+    return names;
+}
+
+static constexpr auto valtype_names = make_valtype_names();
 #endif
 
 [[noreturn]] static inline void trap(const char *message) {
@@ -477,17 +482,25 @@ enum class FCInstruction {
 };
 
 #ifdef WASM_DEBUG
-static std::string instructions[] = {
-#define DEFINE_NAME(name, str, byte) [byte] = str,
+consteval auto make_instructions() {
+    std::array<std::string_view, 256> instructions = {};
+#define DEFINE_NAME(name, str, byte) instructions[byte] = str;
     FOREACH_INSTRUCTION(DEFINE_NAME)
 #undef DEFINE_NAME
-};
+    return instructions;
+}
 
-static std::string multibyte_instructions[] = {
-#define DEFINE_NAME(name, str, byte) [byte] = str,
+static constexpr auto instructions = make_instructions();
+
+consteval auto make_multibyte_instructions() {
+    std::array<std::string_view, 256> instructions = {};
+#define DEFINE_NAME(name, str, byte) instructions[byte] = str;
     FOREACH_MULTIBYTE_INSTRUCTION(DEFINE_NAME)
 #undef DEFINE_NAME
-};
+    return instructions;
+}
+
+static constexpr auto multibyte_instructions = make_multibyte_instructions();
 #endif
 
 static inline bool is_instruction(uint8_t byte) {
