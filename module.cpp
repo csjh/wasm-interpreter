@@ -1678,7 +1678,7 @@ consteval std::array<ValidationHandler *, 256> make_fc_funcs() {
     funcs.fill(&validate_missing);
 
 #define V(name, _, byte) funcs[byte] = &validate_##name;
-    FOREACH_INSTRUCTION(V)
+    FOREACH_MULTIBYTE_INSTRUCTION(V)
 #undef V
 
     return funcs;
