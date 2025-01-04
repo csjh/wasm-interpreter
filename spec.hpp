@@ -12,6 +12,12 @@ template <typename Err>
     throw Err(msg);
 }
 
+template <typename Err>
+[[noreturn]] static void __attribute__((preserve_most)) error(std::string msg) {
+    // todo: check if forwarding args to `std::string` allows for nicer error messages in hot path errors (or just figure out other system to allow dynamic-ness
+    throw Err(msg);
+}
+
 class malformed_error : public std::runtime_error {
   public:
     malformed_error(const std::string &msg) : std::runtime_error(msg) {}
