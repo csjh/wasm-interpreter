@@ -580,12 +580,22 @@ static inline bool brk(Instance &, uint8_t *&iter, tape<WasmValue> &stack,
     }
 #define TRUNC_SAT(from, to)                                                    \
     {                                                                          \
-        if (stack[-1].from < (from)std::numeric_limits<to>::min()) {           \
-            stack[-1].to = std::numeric_limits<to>::min();                     \
-        } else if (stack[-1].from > (from)std::numeric_limits<to>::max()) {    \
-            stack[-1].to = std::numeric_limits<to>::max();                     \
+        from val = stack[-1].from;                                             \
+        if (std::isnan(val)) {                                                 \
+            stack[-1].to = 0;                                                  \
         } else {                                                               \
-            stack[-1].to = static_cast<to>(stack[-1].from);                    \
+            constexpr from min_bound = std::is_unsigned_v<to> ? -1.0 :         \
+                static_cast<from>(std::numeric_limits<to>::min());             \
+            constexpr from max_bound =                                         \
+                static_cast<from>(std::numeric_limits<to>::max()) + 1.0;       \
+                                                                               \
+            if (val <= min_bound) {                                            \
+                stack[-1].to = std::numeric_limits<to>::min();                 \
+            } else if (val >= max_bound) {                                     \
+                stack[-1].to = std::numeric_limits<to>::max();                 \
+            } else {                                                           \
+                stack[-1].to = static_cast<to>(val);                           \
+            }                                                                  \
         }                                                                      \
         nextop();                                                              \
     }
